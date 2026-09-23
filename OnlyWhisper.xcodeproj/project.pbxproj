@@ -1,0 +1,457 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		BF000001 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = PD000001 /* FluidAudio */; };
+		BF000002 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = PD000002 /* WhisperKit */; };
+		BF000003 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = PD000003 /* MLXLLM */; };
+		BF000004 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = PD000004 /* MLXLMCommon */; };
+		BF000005 /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = PD000005 /* MLXHuggingFace */; };
+		BF000006 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = PD000006 /* KeyboardShortcuts */; };
+		BF000007 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = PD000007 /* Tokenizers */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		PX000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = PR000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = TG000001;
+			remoteInfo = OnlyWhisper;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		FR000001 /* OnlyWhisper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OnlyWhisper.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		FR000002 /* OnlyWhisperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OnlyWhisperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		EX000001 /* Exceptions for "OnlyWhisper" folder in "OnlyWhisper" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+				OnlyWhisper.entitlements,
+			);
+			target = TG000001 /* OnlyWhisper */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		SG000001 /* OnlyWhisper */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				EX000001 /* Exceptions for "OnlyWhisper" folder in "OnlyWhisper" target */,
+			);
+			path = OnlyWhisper;
+			sourceTree = "<group>";
+		};
+		SG000002 /* OnlyWhisperTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = OnlyWhisperTests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		PH000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BF000001 /* FluidAudio in Frameworks */,
+				BF000002 /* WhisperKit in Frameworks */,
+				BF000003 /* MLXLLM in Frameworks */,
+				BF000004 /* MLXLMCommon in Frameworks */,
+				BF000005 /* MLXHuggingFace in Frameworks */,
+				BF000006 /* KeyboardShortcuts in Frameworks */,
+				BF000007 /* Tokenizers in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		PH000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		GR000001 = {
+			isa = PBXGroup;
+			children = (
+				SG000001 /* OnlyWhisper */,
+				SG000002 /* OnlyWhisperTests */,
+				FR000001 /* OnlyWhisper.app */,
+				FR000002 /* OnlyWhisperTests.xctest */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		TG000001 /* OnlyWhisper */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CL000002 /* Build configuration list for PBXNativeTarget "OnlyWhisper" */;
+			buildPhases = (
+				PH000003 /* Sources */,
+				PH000001 /* Frameworks */,
+				PH000004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				SG000001 /* OnlyWhisper */,
+			);
+			name = OnlyWhisper;
+			packageProductDependencies = (
+				PD000001 /* FluidAudio */,
+				PD000002 /* WhisperKit */,
+				PD000003 /* MLXLLM */,
+				PD000004 /* MLXLMCommon */,
+				PD000005 /* MLXHuggingFace */,
+				PD000006 /* KeyboardShortcuts */,
+				PD000007 /* Tokenizers */,
+			);
+			productName = OnlyWhisper;
+			productReference = FR000001 /* OnlyWhisper.app */;
+			productType = "com.apple.product-type.application";
+		};
+		TG000002 /* OnlyWhisperTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CL000003 /* Build configuration list for PBXNativeTarget "OnlyWhisperTests" */;
+			buildPhases = (
+				PH000005 /* Sources */,
+				PH000002 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DP000001 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				SG000002 /* OnlyWhisperTests */,
+			);
+			name = OnlyWhisperTests;
+			packageProductDependencies = (
+			);
+			productName = OnlyWhisperTests;
+			productReference = FR000002 /* OnlyWhisperTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		PR000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					TG000001 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+				};
+			};
+			buildConfigurationList = CL000001 /* Build configuration list for PBXProject "OnlyWhisper" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = GR000001;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				PK000001 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+				PK000002 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */,
+				PK000003 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+				PK000004 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
+				PK000005 /* XCRemoteSwiftPackageReference "swift-transformers" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = GR000001;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				TG000001 /* OnlyWhisper */,
+				TG000002 /* OnlyWhisperTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		PH000004 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		PH000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		PH000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		DP000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = TG000001 /* OnlyWhisper */;
+			targetProxy = PX000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		BC000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		BC000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		BC000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = OnlyWhisper/OnlyWhisper.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = OnlyWhisper/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.onlywhisper.mac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		BC000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = OnlyWhisper/OnlyWhisper.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = OnlyWhisper/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.onlywhisper.mac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		BC000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.onlywhisper.mac.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OnlyWhisper.app/Contents/MacOS/OnlyWhisper";
+			};
+			name = Debug;
+		};
+		BC000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.onlywhisper.mac.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OnlyWhisper.app/Contents/MacOS/OnlyWhisper";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		CL000001 /* Build configuration list for PBXProject "OnlyWhisper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BC000001 /* Debug */,
+				BC000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CL000002 /* Build configuration list for PBXNativeTarget "OnlyWhisper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BC000003 /* Debug */,
+				BC000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CL000003 /* Build configuration list for PBXNativeTarget "OnlyWhisperTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BC000005 /* Debug */,
+				BC000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		PK000001 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				kind = revision;
+				revision = b811a61569aa02691c99b808d08ee989b630c133;
+			};
+		};
+		PK000002 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/argmaxinc/argmax-oss-swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.1.0;
+			};
+		};
+		PK000003 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.31.4;
+			};
+		};
+		PK000005 /* XCRemoteSwiftPackageReference "swift-transformers" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-transformers.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.3.0;
+			};
+		};
+		PK000004 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sindresorhus/KeyboardShortcuts.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.9.4;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		PD000001 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = PK000001 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
+		PD000002 /* WhisperKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = PK000002 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */;
+			productName = WhisperKit;
+		};
+		PD000003 /* MLXLLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = PK000003 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLLM;
+		};
+		PD000004 /* MLXLMCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = PK000003 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLMCommon;
+		};
+		PD000005 /* MLXHuggingFace */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = PK000003 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXHuggingFace;
+		};
+		PD000007 /* Tokenizers */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = PK000005 /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Tokenizers;
+		};
+		PD000006 /* KeyboardShortcuts */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = PK000004 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */;
+			productName = KeyboardShortcuts;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = PR000001 /* Project object */;
+}
