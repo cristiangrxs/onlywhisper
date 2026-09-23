@@ -62,6 +62,7 @@ final class AppModel {
     private var dictationSession = DictationSession()
     private var rawOpen = ""
     private var rawLog = ""
+    private var watchesWindowClose = false
 
     private init() {
         recorder.setLevelHandler { [weak self] level in
@@ -100,6 +101,59 @@ final class AppModel {
             NSApp.activate()
         }
         applyLaunchAtLogin()
+        watchWindowClose()
+    }
+
+    /// Settings is a normal window. A menu-bar app stays behind other apps until it becomes a regular, active app.
+    func presentSettings(open: () -> Void) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.unhide(nil)
+        open()
+        orderSettingsFront()
+    }
+
+    func orderSettingsFront() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.unhide(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        Task { @MainActor in
+            for _ in 0..<12 {
+                guard let window = NSApp.windows.first(where: { $0.identifier == AppWindows.settings }) else {
+                    try? await Task.sleep(for: .milliseconds(40))
+                    continue
+                }
+                window.collectionBehavior.insert(.moveToActiveSpace)
+                window.level = .floating
+                window.makeKeyAndOrderFront(nil)
+                window.orderFrontRegardless()
+                NSApp.activate(ignoringOtherApps: true)
+                if NSApp.isActive {
+                    window.level = .normal
+                    window.orderFrontRegardless()
+                }
+                return
+            }
+        }
+    }
+
+    private func watchWindowClose() {
+        guard !watchesWindowClose else { return }
+        watchesWindowClose = true
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nil,
+            queue: .main
+        ) { notification in
+            let closing = notification.object as? NSWindow
+            Task { @MainActor in
+                let stillOpen = NSApp.windows.contains { window in
+                    window !== closing && window.isVisible && window.canBecomeMain && !(window is NSPanel)
+                }
+                if !stillOpen {
+                    NSApp.setActivationPolicy(.accessory)
+                }
+            }
+        }
     }
 
     func enqueueFiles(_ urls: [URL]) {

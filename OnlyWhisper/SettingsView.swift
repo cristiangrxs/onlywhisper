@@ -1,5 +1,10 @@
+import AppKit
 import KeyboardShortcuts
 import SwiftUI
+
+enum AppWindows {
+    static let settings = NSUserInterfaceItemIdentifier("onlywhisper.settings")
+}
 
 struct MenuContent: View {
     @Environment(AppModel.self) private var model
@@ -13,7 +18,9 @@ struct MenuContent: View {
         Button(t("Files", "Dateien")) { model.open("files") }
         Button(t("History", "Verlauf")) { model.open("history") }
         Divider()
-        Button(t("Settings", "Einstellungen")) { openSettings() }
+        Button(t("Settings", "Einstellungen")) {
+            model.presentSettings { openSettings() }
+        }
         Divider()
         Button(t("Quit", "Beenden")) { NSApp.terminate(nil) }
             .keyboardShortcut("q")
@@ -62,6 +69,7 @@ struct SettingsView: View {
             .padding()
         }
         .frame(minWidth: 680, minHeight: 460)
+        .background(SettingsWindowFinder())
     }
 
     private var general: some View {
@@ -161,6 +169,25 @@ struct SettingsView: View {
                 Task { await model.downloads.downloadRequiredModels() }
             }
             .disabled(model.downloads.isRunning)
+        }
+    }
+}
+
+private struct SettingsWindowFinder: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            view.window?.identifier = AppWindows.settings
+            AppModel.shared.orderSettingsFront()
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            if nsView.window?.identifier != AppWindows.settings {
+                nsView.window?.identifier = AppWindows.settings
+            }
         }
     }
 }
