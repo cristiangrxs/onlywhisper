@@ -95,8 +95,16 @@ final class AppModel {
         downloads.refreshReadyState()
         hotkeys.keyCode = settings.dictationKey.keyCode
         _ = hotkeys.start()
-        needsSetup = !downloads.isReady || !microphoneGranted || !accessibilityGranted || !inputGranted
-        if needsSetup {
+        if downloads.isReady {
+            settings.setupCompleted = true
+            needsSetup = false
+        } else if settings.setupCompleted {
+            needsSetup = true
+            setupStep = 4
+            opener?("setup")
+            NSApp.activate()
+        } else {
+            needsSetup = true
             opener?("setup")
             NSApp.activate()
         }
@@ -206,6 +214,7 @@ final class AppModel {
         default:
             await downloads.downloadRequiredModels()
             if downloads.isReady {
+                settings.setupCompleted = true
                 needsSetup = false
                 NSApp.keyWindow?.close()
             }
@@ -259,7 +268,9 @@ final class AppModel {
     private func beginRecording(handsFree: Bool) {
         guard downloads.isReady, microphoneGranted else {
             needsSetup = true
+            setupStep = downloads.isReady ? 1 : setupStep
             opener?("setup")
+            NSApp.activate()
             return
         }
         dictationEpoch += 1

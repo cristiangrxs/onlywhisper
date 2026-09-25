@@ -26,6 +26,7 @@ struct OnlyWhisperApp: App {
         Window(t("Setup", "Einrichtung"), id: "setup") {
             OnboardingView().environment(model)
         }
+        .defaultLaunchBehavior(.suppressed)
         Window(t("Meeting", "Meeting"), id: "meeting") {
             MeetingView().environment(model)
         }

@@ -204,6 +204,9 @@ final class SettingsStore {
     var translateTarget: SpeechChoice {
         didSet { save() }
     }
+    var setupCompleted: Bool {
+        didSet { save() }
+    }
 
     private let url: URL
 
@@ -215,12 +218,13 @@ final class SettingsStore {
         let stored = (try? Data(contentsOf: url)).flatMap {
             try? JSONDecoder().decode(Stored.self, from: $0)
         }
-        language = stored?.language ?? .german
+        language = stored?.language ?? .automatic
         polishEnabled = stored?.polishEnabled ?? true
         launchAtLogin = stored?.launchAtLogin ?? false
         dictationKey = stored?.dictationKey ?? .rightOption
         systemAudioInMeetings = stored?.systemAudioInMeetings ?? false
         translateTarget = stored?.translateTarget ?? .english
+        setupCompleted = stored?.setupCompleted ?? false
     }
 
     private func save() {
@@ -230,7 +234,8 @@ final class SettingsStore {
             launchAtLogin: launchAtLogin,
             dictationKey: dictationKey,
             systemAudioInMeetings: systemAudioInMeetings,
-            translateTarget: translateTarget
+            translateTarget: translateTarget,
+            setupCompleted: setupCompleted
         )
         guard let data = try? JSONEncoder().encode(stored) else { return }
         try? data.write(to: url, options: .atomic)
@@ -243,5 +248,35 @@ final class SettingsStore {
         var dictationKey: DictationKey
         var systemAudioInMeetings: Bool
         var translateTarget: SpeechChoice
+        var setupCompleted: Bool?
+
+        init(
+            language: SpeechChoice,
+            polishEnabled: Bool,
+            launchAtLogin: Bool,
+            dictationKey: DictationKey,
+            systemAudioInMeetings: Bool,
+            translateTarget: SpeechChoice,
+            setupCompleted: Bool?
+        ) {
+            self.language = language
+            self.polishEnabled = polishEnabled
+            self.launchAtLogin = launchAtLogin
+            self.dictationKey = dictationKey
+            self.systemAudioInMeetings = systemAudioInMeetings
+            self.translateTarget = translateTarget
+            self.setupCompleted = setupCompleted
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            language = try container.decode(SpeechChoice.self, forKey: .language)
+            polishEnabled = try container.decode(Bool.self, forKey: .polishEnabled)
+            launchAtLogin = try container.decode(Bool.self, forKey: .launchAtLogin)
+            dictationKey = try container.decode(DictationKey.self, forKey: .dictationKey)
+            systemAudioInMeetings = try container.decode(Bool.self, forKey: .systemAudioInMeetings)
+            translateTarget = try container.decode(SpeechChoice.self, forKey: .translateTarget)
+            setupCompleted = try container.decodeIfPresent(Bool.self, forKey: .setupCompleted)
+        }
     }
 }
