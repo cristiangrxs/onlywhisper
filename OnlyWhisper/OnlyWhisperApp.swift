@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct OnlyWhisperApp: App {
     @State private var model = AppModel.shared
+    private let updater = Updater.shared
 
     var body: some Scene {
         MenuBarExtra {

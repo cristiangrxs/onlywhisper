@@ -18,6 +18,8 @@ struct MenuContent: View {
         Button(t("Files", "Dateien")) { model.open("files") }
         Button(t("History", "Verlauf")) { model.open("history") }
         Divider()
+        Button(t("Check for Updates…", "Nach Updates suchen…")) { Updater.shared.checkForUpdates() }
+            .disabled(!Updater.shared.canCheckForUpdates)
         Button(t("Settings", "Einstellungen")) {
             model.presentSettings { openSettings() }
         }
@@ -78,6 +80,18 @@ struct SettingsView: View {
                 get: { model.settings.launchAtLogin },
                 set: { model.setLaunchAtLogin($0) }
             ))
+            Toggle(t("Check for updates automatically", "Automatisch nach Updates suchen"), isOn: Binding(
+                get: { Updater.shared.automaticallyChecksForUpdates },
+                set: { Updater.shared.automaticallyChecksForUpdates = $0 }
+            ))
+            LabeledContent(t("Version", "Version")) {
+                HStack {
+                    Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
+                        .foregroundStyle(.secondary)
+                    Button(t("Check for Updates…", "Nach Updates suchen…")) { Updater.shared.checkForUpdates() }
+                        .disabled(!Updater.shared.canCheckForUpdates)
+                }
+            }
             LabeledContent(t("About", "Über")) {
                 Text("Parakeet CC BY 4.0 · Whisper MIT · Qwen Apache 2.0")
                     .foregroundStyle(.secondary)
