@@ -13,9 +13,10 @@ struct MenuBarLabel: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Image(systemName: model.menuSymbol)
-            .symbolEffect(.variableColor.iterative, isActive: isRecording && !reduceMotion)
+        Image(nsImage: BrandArtwork.menuBar)
             .accessibilityLabel("OnlyWhisper")
+            .opacity(isRecording && !reduceMotion ? 0.45 : 1)
+            .animation(isRecording && !reduceMotion ? .easeInOut(duration: 0.7).repeatForever(autoreverses: true) : .default, value: isRecording)
             .task {
                 model.bind(openWindow: { openWindow(id: $0) }, openSettings: { openSettings() })
                 model.bootstrap()

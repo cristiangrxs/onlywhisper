@@ -7,7 +7,13 @@ struct OnboardingView: View {
     var body: some View {
         VStack(spacing: DS.spacingXL) {
             StepDots(current: model.setupStep, total: 5)
-            IconTile(symbol: symbol, tint: tint, size: 64)
+            Group {
+                if model.setupStep == 0 {
+                    BrandIcon(size: 72)
+                } else {
+                    IconTile(symbol: symbol, tint: tint, size: 64)
+                }
+            }
                 .id(model.setupStep)
                 .transition(.scale(scale: 0.8).combined(with: .opacity))
             VStack(spacing: DS.spacingS) {

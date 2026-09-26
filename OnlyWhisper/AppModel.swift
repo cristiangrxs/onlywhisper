@@ -89,14 +89,6 @@ final class AppModel {
         }
     }
 
-    var menuSymbol: String {
-        switch phase {
-        case .recording, .handsFree: "waveform"
-        case .working: "ellipsis"
-        default: "mic"
-        }
-    }
-
     func bind(openWindow: @escaping (String) -> Void, openSettings: @escaping () -> Void) {
         opener = openWindow
         settingsOpener = openSettings

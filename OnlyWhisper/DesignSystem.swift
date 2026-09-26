@@ -281,7 +281,7 @@ struct AppBadge: View {
 
     var body: some View {
         HStack(spacing: DS.spacingS) {
-            IconTile(symbol: "waveform", tint: .indigo, size: 18)
+            BrandIcon(size: 18)
             Text(text)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
