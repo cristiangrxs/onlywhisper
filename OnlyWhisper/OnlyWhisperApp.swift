@@ -7,12 +7,13 @@ struct OnlyWhisperApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuContent()
+            CommandPaletteView(context: .menuBar)
                 .environment(model)
         } label: {
             MenuBarLabel()
                 .environment(model)
         }
+        .menuBarExtraStyle(.window)
         .commands {
             CommandGroup(replacing: .appSettings) {
                 SettingsLink()
@@ -28,17 +29,38 @@ struct OnlyWhisperApp: App {
             OnboardingView().environment(model)
         }
         .defaultLaunchBehavior(.suppressed)
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .windowBackgroundDragBehavior(.enabled)
+        .defaultPosition(.center)
+
         Window(t("Meeting", "Meeting"), id: "meeting") {
             MeetingView().environment(model)
         }
+        .windowStyle(.hiddenTitleBar)
+        .windowBackgroundDragBehavior(.enabled)
+        .defaultSize(width: 680, height: 560)
+
         Window(t("Files", "Dateien"), id: "files") {
             FilesView().environment(model)
         }
+        .windowStyle(.hiddenTitleBar)
+        .windowBackgroundDragBehavior(.enabled)
+        .defaultSize(width: 620, height: 480)
+
         Window(t("History", "Verlauf"), id: "history") {
             HistoryView().environment(model)
         }
+        .windowStyle(.hiddenTitleBar)
+        .windowBackgroundDragBehavior(.enabled)
+        .defaultSize(width: 820, height: 520)
+
         Window(t("Rewrite", "Umschreiben"), id: "rewrite") {
             RewriteView().environment(model)
         }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .windowBackgroundDragBehavior(.enabled)
+        .defaultPosition(.center)
     }
 }

@@ -10,6 +10,11 @@ extension KeyboardShortcuts.Name {
         "rewriteSelection",
         default: .init(.e, modifiers: [.command, .shift])
     )
+    /// Must not use Option (both dictation keys are Option keys). Cmd+Shift+Space belongs to Siri on macOS 27.
+    nonisolated(unsafe) static let commandPalette = Self(
+        "commandPalette",
+        default: .init(.space, modifiers: [.control, .shift])
+    )
 }
 
 enum CapturePhase: Equatable {
@@ -51,7 +56,9 @@ final class AppModel {
     private let qwen = QwenPolisher()
     private let diarizer = MeetingDiarizer()
     private var opener: ((String) -> Void)?
-    private var meetingStartedAt: Date?
+    private var settingsOpener: (() -> Void)?
+    private var didBootstrap = false
+    private(set) var meetingStartedAt: Date?
     private var transcribedUntil: Int = 0
     private var meetingTimer: Task<Void, Never>?
     private var dictationTask: Task<Void, Never>?
@@ -77,6 +84,9 @@ final class AppModel {
         KeyboardShortcuts.onKeyDown(for: .rewriteSelection) { [weak self] in
             Task { @MainActor in self?.beginRewrite() }
         }
+        KeyboardShortcuts.onKeyDown(for: .commandPalette) {
+            Task { @MainActor in CommandPaletteController.shared.toggle() }
+        }
     }
 
     var menuSymbol: String {
@@ -87,11 +97,38 @@ final class AppModel {
         }
     }
 
-    func bind(openWindow: @escaping (String) -> Void) {
+    func bind(openWindow: @escaping (String) -> Void, openSettings: @escaping () -> Void) {
         opener = openWindow
+        settingsOpener = openSettings
+    }
+
+    func showSettings() {
+        presentSettings { settingsOpener?() }
+    }
+
+    /// Gives focus back to the app the user was in, so dictation, rewrite, and paste land there.
+    func returnFocus(then work: @escaping @MainActor () -> Void) {
+        Task { @MainActor in
+            if NSApp.isActive {
+                NSApp.hide(nil)
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+            work()
+        }
+    }
+
+    func paste(_ text: String) {
+        returnFocus { TextInserter.insert(text) }
+    }
+
+    func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     func bootstrap() {
+        guard !didBootstrap else { return }
+        didBootstrap = true
         downloads.refreshReadyState()
         hotkeys.keyCode = settings.dictationKey.keyCode
         _ = hotkeys.start()
@@ -121,12 +158,17 @@ final class AppModel {
     }
 
     func orderSettingsFront() {
+        orderFront { $0.identifier == AppWindows.settings }
+    }
+
+    /// A menu-bar app opened from the non-activating palette is not allowed to activate cooperatively, so force it.
+    private func orderFront(windowMatching matches: @escaping @MainActor (NSWindow) -> Bool) {
         NSApp.setActivationPolicy(.regular)
         NSApp.unhide(nil)
         NSApp.activate(ignoringOtherApps: true)
         Task { @MainActor in
             for _ in 0..<12 {
-                guard let window = NSApp.windows.first(where: { $0.identifier == AppWindows.settings }) else {
+                guard let window = NSApp.windows.first(where: matches) else {
                     try? await Task.sleep(for: .milliseconds(40))
                     continue
                 }
@@ -172,9 +214,13 @@ final class AppModel {
         beginRecording(handsFree: true)
     }
 
+    func finishHandsFree() {
+        Task { await finishDictation() }
+    }
+
     func open(_ id: String) {
         opener?(id)
-        NSApp.activate()
+        orderFront { $0.identifier?.rawValue.hasPrefix(id) == true && $0.isVisible }
     }
 
     var microphoneGranted: Bool {

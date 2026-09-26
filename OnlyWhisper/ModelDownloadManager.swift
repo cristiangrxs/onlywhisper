@@ -1,6 +1,50 @@
 import FluidAudio
 import Foundation
 
+struct ModelInfo: Identifiable, Sendable {
+    let id: String
+    let name: String
+    let role: String
+    let size: String
+    let symbol: String
+    /// Share of the overall download progress where this model is fetched.
+    let progressRange: ClosedRange<Double>
+
+    static let catalog: [ModelInfo] = [
+        ModelInfo(
+            id: "parakeet",
+            name: "Parakeet v3",
+            role: t("Fast speech recognition", "Schnelle Spracherkennung"),
+            size: "≈ 0.5 GB",
+            symbol: "waveform",
+            progressRange: 0...0.25
+        ),
+        ModelInfo(
+            id: "whisper",
+            name: "Whisper Large v3 Turbo",
+            role: t("More languages", "Weitere Sprachen"),
+            size: "≈ 1.6 GB",
+            symbol: "globe",
+            progressRange: 0.25...0.55
+        ),
+        ModelInfo(
+            id: "qwen",
+            name: "Qwen3 4B",
+            role: t("Polish and rewrite", "Glätten und Umschreiben"),
+            size: "≈ 2.5 GB",
+            symbol: "text.badge.star",
+            progressRange: 0.55...1
+        ),
+    ]
+}
+
+enum ModelState: Equatable {
+    case ready
+    case downloading(Double)
+    case waiting
+    case missing
+}
+
 @MainActor
 @Observable
 final class ModelDownloadManager {
@@ -14,6 +58,15 @@ final class ModelDownloadManager {
         isReady = FileManager.default.fileExists(atPath: ModelPaths.readyMarker.path)
             && AsrModels.modelsExist(at: ModelPaths.parakeet, version: .v3, encoderPrecision: .int8)
             && qwenWeightsPresent
+    }
+
+    func state(of model: ModelInfo) -> ModelState {
+        if isReady { return .ready }
+        let range = model.progressRange
+        if fraction >= range.upperBound { return .ready }
+        guard isRunning else { return .missing }
+        guard fraction >= range.lowerBound else { return .waiting }
+        return .downloading((fraction - range.lowerBound) / (range.upperBound - range.lowerBound))
     }
 
     var qwenWeightsPresent: Bool {

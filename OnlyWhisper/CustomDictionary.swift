@@ -62,6 +62,11 @@ final class DictionaryStore {
         dictionary.entries.append(CustomDictionary.Entry(heard: heard, written: written))
     }
 
+    func update(_ entry: CustomDictionary.Entry) {
+        guard let index = dictionary.entries.firstIndex(where: { $0.id == entry.id }) else { return }
+        dictionary.entries[index] = entry
+    }
+
     func remove(_ entry: CustomDictionary.Entry) {
         dictionary.entries.removeAll { $0.id == entry.id }
     }

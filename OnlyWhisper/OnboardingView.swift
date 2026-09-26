@@ -2,34 +2,105 @@ import SwiftUI
 
 struct OnboardingView: View {
     @Environment(AppModel.self) private var model
+    @State private var granted = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text(title)
-                .font(.title2)
-            Text(detail)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        VStack(spacing: DS.spacingXL) {
+            StepDots(current: model.setupStep, total: 5)
+            IconTile(symbol: symbol, tint: tint, size: 64)
+                .id(model.setupStep)
+                .transition(.scale(scale: 0.8).combined(with: .opacity))
+            VStack(spacing: DS.spacingS) {
+                Text(title)
+                    .font(.title2.weight(.semibold))
+                Text(detail)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .multilineTextAlignment(.center)
+
+            if (1...3).contains(model.setupStep) {
+                StatusBadge(
+                    title: granted ? t("Allowed", "Erlaubt") : t("Not allowed yet", "Noch nicht erlaubt"),
+                    tint: granted ? .green : .orange
+                )
+            }
+
             if model.setupStep == 4 {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(model.downloads.status)
-                        .font(.callout)
-                    ProgressView(value: model.downloads.fraction)
-                }
-                if let error = model.downloads.lastError {
-                    Text(error)
-                        .font(.callout)
-                        .foregroundStyle(.red)
+                VStack(spacing: DS.spacingS) {
+                    ForEach(ModelInfo.catalog) { info in
+                        ModelCard(info: info, state: model.downloads.state(of: info))
+                    }
+                    if model.downloads.isRunning {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ProgressView(value: model.downloads.fraction)
+                            Text(model.downloads.status)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, DS.spacingXS)
+                    }
+                    if let error = model.downloads.lastError {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
-            Button(buttonTitle) {
+
+            Button {
                 Task { await model.continueSetup() }
+            } label: {
+                Text(buttonTitle)
+                    .frame(maxWidth: .infinity)
             }
+            .buttonStyle(.glassProminent)
+            .controlSize(.large)
             .keyboardShortcut(.defaultAction)
             .disabled(model.downloads.isRunning)
         }
-        .padding(28)
-        .frame(width: 420)
+        .padding(.horizontal, 36)
+        .padding(.top, DS.spacingM)
+        .padding(.bottom, 32)
+        .frame(width: 460)
+        .animation(.snappy, value: model.setupStep)
+        .glassWindow()
+        .task(id: model.setupStep) {
+            while !Task.isCancelled {
+                granted = permissionGranted
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private var permissionGranted: Bool {
+        switch model.setupStep {
+        case 1: model.microphoneGranted
+        case 2: model.accessibilityGranted
+        case 3: model.inputGranted
+        default: false
+        }
+    }
+
+    private var symbol: String {
+        switch model.setupStep {
+        case 0: "lock.shield.fill"
+        case 1: "mic.fill"
+        case 2: "accessibility"
+        case 3: "keyboard.fill"
+        default: "arrow.down.circle.fill"
+        }
+    }
+
+    private var tint: Color {
+        switch model.setupStep {
+        case 0: .indigo
+        case 1: .red
+        case 2: .blue
+        case 3: .orange
+        default: .green
+        }
     }
 
     private var title: String {
@@ -64,6 +135,28 @@ struct OnboardingView: View {
     }
 
     private var buttonTitle: String {
-        model.setupStep == 4 ? t("Download", "Laden") : t("Continue", "Weiter")
+        switch model.setupStep {
+        case 0: t("Get Started", "Los geht’s")
+        case 1...3 where granted: t("Continue", "Weiter")
+        case 1...3: t("Allow", "Erlauben")
+        default: model.downloads.lastError == nil ? t("Download", "Laden") : t("Try Again", "Erneut versuchen")
+        }
+    }
+}
+
+private struct StepDots: View {
+    var current: Int
+    var total: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<total, id: \.self) { index in
+                Capsule()
+                    .fill(index <= current ? Color.accentColor : Color.primary.opacity(0.15))
+                    .frame(width: index == current ? 18 : 6, height: 6)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(t("Step \(current + 1) of \(total)", "Schritt \(current + 1) von \(total)"))
     }
 }
