@@ -3,7 +3,7 @@
 # Builds, signs, notarizes and publishes an OnlyWhisper release.
 #
 # Usage:
-#   scripts/release.sh [--notes path/to/notes.md] [--draft] [--skip-notarize]
+#   scripts/release.sh [--notes path/to/notes.md] [--draft] [--skip-notarize] [--skip-sign]
 #
 # Required environment:
 #   DEVELOPER_ID     Signing identity, e.g. "Developer ID Application: Jane Doe (ABCDE12345)"
@@ -18,6 +18,9 @@
 # Sparkle compares CURRENT_PROJECT_VERSION (CFBundleVersion), so it must always increase.
 # One-time setup: run Sparkle's generate_keys (stores the private key in the login keychain)
 # and put the printed public key into the SPARKLE_PUBLIC_ED_KEY build setting.
+#
+# --skip-sign builds an ad-hoc signed DMG and skips notarization and Sparkle.
+# macOS will ask each downloader to allow the app in Privacy & Security.
 
 set -euo pipefail
 
@@ -29,18 +32,20 @@ SCHEME="OnlyWhisper"
 APP_NAME="OnlyWhisper"
 RELEASES_REPO="${RELEASES_REPO:-cristiangrxs/onlywhisper-releases}"
 BUILD_DIR="$ROOT/build/release"
-DERIVED_DATA="$ROOT/build/DerivedData"
+DERIVED_DATA="$ROOT/DerivedData"
 
 NOTES_FILE=""
 DRAFT_FLAG=""
 SKIP_NOTARIZE=0
+SKIP_SIGN=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --notes) NOTES_FILE="$2"; shift 2 ;;
     --draft) DRAFT_FLAG="--draft"; shift ;;
     --skip-notarize) SKIP_NOTARIZE=1; shift ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    --skip-sign) SKIP_SIGN=1; SKIP_NOTARIZE=1; shift ;;
+    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -48,23 +53,27 @@ done
 step() { printf '\n\033[1;35m==> %s\033[0m\n' "$1"; }
 fail() { printf '\033[1;31merror:\033[0m %s\n' "$1" >&2; exit 1; }
 
-for var in DEVELOPER_ID TEAM_ID; do
-  [[ -n "${!var:-}" ]] || fail "$var is not set"
-done
-if [[ $SKIP_NOTARIZE -eq 0 && -z "${NOTARY_PROFILE:-}" ]]; then
-  fail "NOTARY_PROFILE is not set (or pass --skip-notarize for a local test build)"
+if [[ $SKIP_SIGN -eq 0 ]]; then
+  for var in DEVELOPER_ID TEAM_ID; do
+    [[ -n "${!var:-}" ]] || fail "$var is not set"
+  done
+  if [[ $SKIP_NOTARIZE -eq 0 && -z "${NOTARY_PROFILE:-}" ]]; then
+    fail "NOTARY_PROFILE is not set (or pass --skip-notarize for a local test build)"
+  fi
 fi
 command -v gh >/dev/null || fail "GitHub CLI (gh) is not installed"
 [[ -z "$NOTES_FILE" || -f "$NOTES_FILE" ]] || fail "Notes file not found: $NOTES_FILE"
 
 step "Reading version"
-SETTINGS="$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release -showBuildSettings 2>/dev/null)"
+SETTINGS="$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release -derivedDataPath "$DERIVED_DATA" -showBuildSettings 2>/dev/null)"
 VERSION="$(awk -F' = ' '/ MARKETING_VERSION = / {print $2; exit}' <<<"$SETTINGS")"
 BUILD="$(awk -F' = ' '/ CURRENT_PROJECT_VERSION = / {print $2; exit}' <<<"$SETTINGS")"
 TAG="v$VERSION"
 [[ -n "$VERSION" && -n "$BUILD" ]] || fail "Could not read MARKETING_VERSION / CURRENT_PROJECT_VERSION"
-grep -q ' SPARKLE_PUBLIC_ED_KEY = [^ ]' <<<"$SETTINGS" \
-  || fail "SPARKLE_PUBLIC_ED_KEY is empty. Run Sparkle's generate_keys once and set the key in the target build settings."
+if [[ $SKIP_SIGN -eq 0 ]]; then
+  grep -q ' SPARKLE_PUBLIC_ED_KEY = [^ ]' <<<"$SETTINGS" \
+    || fail "SPARKLE_PUBLIC_ED_KEY is empty. Run Sparkle's generate_keys once and set the key in the target build settings."
+fi
 echo "Version $VERSION (build $BUILD)"
 
 if gh release view "$TAG" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
@@ -78,6 +87,23 @@ EXPORT_DIR="$BUILD_DIR/export"
 APP="$EXPORT_DIR/$APP_NAME.app"
 DMG="$BUILD_DIR/$APP_NAME.dmg"
 
+if [[ $SKIP_SIGN -eq 1 ]]; then
+  step "Building without Developer ID"
+  xcodebuild build \
+    -project "$PROJECT" \
+    -scheme "$SCHEME" \
+    -configuration Release \
+    -destination "platform=macOS,arch=arm64" \
+    -derivedDataPath "$DERIVED_DATA" \
+    -skipPackagePluginValidation \
+    -skipMacroValidation \
+    CODE_SIGN_STYLE=Manual \
+    CODE_SIGN_IDENTITY="-" \
+    ENABLE_HARDENED_RUNTIME=NO
+  mkdir -p "$EXPORT_DIR"
+  APP="$DERIVED_DATA/Build/Products/Release/$APP_NAME.app"
+  [[ -d "$APP" ]] || fail "Built app not found at $APP"
+else
 step "Archiving"
 xcodebuild archive -quiet \
   -project "$PROJECT" \
@@ -117,6 +143,7 @@ xcodebuild -exportArchive -quiet \
   -exportOptionsPlist "$BUILD_DIR/ExportOptions.plist"
 
 codesign --verify --deep --strict --verbose=2 "$APP"
+fi
 
 notarize() {
   local file="$1"
@@ -144,7 +171,9 @@ hdiutil create \
   -format UDZO \
   -ov "$DMG" >/dev/null
 rm -rf "$STAGING"
-codesign --sign "$DEVELOPER_ID" --timestamp "$DMG"
+if [[ $SKIP_SIGN -eq 0 ]]; then
+  codesign --sign "$DEVELOPER_ID" --timestamp "$DMG"
+fi
 
 if [[ $SKIP_NOTARIZE -eq 0 ]]; then
   step "Notarizing DMG"
@@ -152,15 +181,17 @@ if [[ $SKIP_NOTARIZE -eq 0 ]]; then
   spctl --assess --type open --context context:primary-signature --verbose "$DMG"
 fi
 
-step "Signing update for Sparkle"
-if [[ -z "${SPARKLE_BIN:-}" ]]; then
-  SPARKLE_BIN="$(find "$DERIVED_DATA" "$ROOT/DerivedData" -type d -path '*artifacts/sparkle/Sparkle/bin' 2>/dev/null | head -n1 || true)"
+if [[ $SKIP_SIGN -eq 0 ]]; then
+  step "Signing update for Sparkle"
+  if [[ -z "${SPARKLE_BIN:-}" ]]; then
+    SPARKLE_BIN="$(find "$DERIVED_DATA" "$ROOT/DerivedData" -type d -path '*artifacts/sparkle/Sparkle/bin' 2>/dev/null | head -n1 || true)"
+  fi
+  [[ -x "${SPARKLE_BIN:-}/sign_update" ]] || fail "Sparkle sign_update not found. Set SPARKLE_BIN to Sparkle's bin directory."
+  SIGNATURE_LINE="$("$SPARKLE_BIN/sign_update" "$DMG")"
+  ED_SIGNATURE="$(sed -E 's/.*sparkle:edSignature="([^"]+)".*/\1/' <<<"$SIGNATURE_LINE")"
+  LENGTH="$(sed -E 's/.*length="([0-9]+)".*/\1/' <<<"$SIGNATURE_LINE")"
+  [[ -n "$ED_SIGNATURE" && -n "$LENGTH" ]] || fail "Could not parse sign_update output: $SIGNATURE_LINE"
 fi
-[[ -x "${SPARKLE_BIN:-}/sign_update" ]] || fail "Sparkle sign_update not found. Set SPARKLE_BIN to Sparkle's bin directory."
-SIGNATURE_LINE="$("$SPARKLE_BIN/sign_update" "$DMG")"
-ED_SIGNATURE="$(sed -E 's/.*sparkle:edSignature="([^"]+)".*/\1/' <<<"$SIGNATURE_LINE")"
-LENGTH="$(sed -E 's/.*length="([0-9]+)".*/\1/' <<<"$SIGNATURE_LINE")"
-[[ -n "$ED_SIGNATURE" && -n "$LENGTH" ]] || fail "Could not parse sign_update output: $SIGNATURE_LINE"
 
 step "Publishing $TAG to $RELEASES_REPO"
 NOTES="$BUILD_DIR/notes.md"
@@ -169,7 +200,11 @@ if [[ -n "$NOTES_FILE" ]]; then
 else
   printf 'OnlyWhisper %s\n' "$VERSION" >"$NOTES"
 fi
-printf '\n<!-- sparkle:edSignature=%s length=%s build=%s -->\n' "$ED_SIGNATURE" "$LENGTH" "$BUILD" >>"$NOTES"
+if [[ $SKIP_SIGN -eq 1 ]]; then
+  printf '\nThis build is not notarized. macOS asks you to allow OnlyWhisper in System Settings > Privacy & Security.\n' >>"$NOTES"
+elif [[ -n "${ED_SIGNATURE:-}" ]]; then
+  printf '\n<!-- sparkle:edSignature=%s length=%s build=%s -->\n' "$ED_SIGNATURE" "$LENGTH" "$BUILD" >>"$NOTES"
+fi
 
 gh release create "$TAG" "$DMG" \
   --repo "$RELEASES_REPO" \
