@@ -45,6 +45,12 @@ final class AppModel {
     var meetingStatus = ""
     var statusMessage = ""
     private(set) var hotkeyReady = false
+    /// Bumps while a permission is still missing, so Settings updates after the user grants it.
+    private(set) var permissionRevision = 0
+    private(set) var shortcutConflicts: Set<KeyboardShortcuts.Name> = []
+    /// Bumps whenever shortcuts are checked, so Settings refreshes even if the conflict set stays empty.
+    private(set) var shortcutRevision = 0
+    var overlayHint: String?
     var rewriteText = ""
     var rewriteInstruction = ""
     var showRewrite = false
@@ -72,6 +78,10 @@ final class AppModel {
     private var rawLog = ""
     private var watchesWindowClose = false
     private var watchesActivation = false
+    private var watchesShortcuts = false
+    private var shortcutSignature = ""
+    private var permissionWatch: Task<Void, Never>?
+    private var hintTask: Task<Void, Never>?
 
     private init() {
         recorder.setLevelHandler { [weak self] level in
@@ -89,6 +99,8 @@ final class AppModel {
         KeyboardShortcuts.onKeyDown(for: .commandPalette) {
             Task { @MainActor in CommandPaletteController.shared.toggle() }
         }
+        refreshShortcutConflicts()
+        watchShortcutChanges()
     }
 
     func bind(openWindow: @escaping (String) -> Void, openSettings: @escaping () -> Void) {
@@ -125,6 +137,7 @@ final class AppModel {
         didBootstrap = true
         downloads.refreshReadyState()
         ensureHotkeys()
+        watchPermissions()
         watchAppActivation()
         if downloads.isReady {
             settings.setupCompleted = true
@@ -238,6 +251,13 @@ final class AppModel {
         ensureHotkeys()
     }
 
+    func openAccessibilitySettings() {
+        requestAccessibility()
+        if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     func openInputMonitoringSettings() {
         _ = CGRequestListenEventAccess()
         if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ListenEvent") {
@@ -251,6 +271,70 @@ final class AppModel {
     func ensureHotkeys() {
         hotkeys.keyCode = settings.dictationKey.keyCode
         hotkeyReady = hotkeys.start()
+    }
+
+    func refreshShortcutConflicts() {
+        shortcutConflicts = ShortcutProbe.conflicts(among: [.commandPalette, .rewriteSelection])
+        shortcutRevision += 1
+    }
+
+    /// Arms the Option-key listener as soon as Input Monitoring is granted, without requiring a click.
+    private func watchPermissions() {
+        guard permissionWatch == nil else { return }
+        permissionWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let input = self.inputGranted
+                let access = self.accessibilityGranted
+                if input {
+                    self.ensureHotkeys()
+                }
+                self.permissionRevision += 1
+                if input && access {
+                    self.permissionWatch = nil
+                    return
+                }
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private func watchShortcutChanges() {
+        guard !watchesShortcuts else { return }
+        watchesShortcuts = true
+        shortcutSignature = Self.shortcutSignature()
+        NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                let signature = Self.shortcutSignature()
+                guard signature != AppModel.shared.shortcutSignature else { return }
+                AppModel.shared.shortcutSignature = signature
+                AppModel.shared.refreshShortcutConflicts()
+            }
+        }
+    }
+
+    private static func shortcutSignature() -> String {
+        func part(_ name: KeyboardShortcuts.Name) -> String {
+            guard let shortcut = KeyboardShortcuts.getShortcut(for: name) else { return "-" }
+            return "\(shortcut.carbonKeyCode):\(shortcut.carbonModifiers)"
+        }
+        return part(.commandPalette) + "|" + part(.rewriteSelection)
+    }
+
+    func showOverlayHint(_ text: String) {
+        hintTask?.cancel()
+        overlayHint = text
+        OverlayPanel.shared.show()
+        hintTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard let self, self.phase == .idle else { return }
+            self.overlayHint = nil
+            OverlayPanel.shared.hide()
+        }
     }
 
     func continueSetup() async {
@@ -353,6 +437,8 @@ final class AppModel {
         dictationCursor = 0
         dictationActivity = .now
         isSmoothing = false
+        hintTask?.cancel()
+        overlayHint = nil
         TextInserter.beginInsertion()
         do {
             try recorder.start()
@@ -507,11 +593,17 @@ final class AppModel {
     }
 
     func beginRewrite() {
-        guard let selected = TextInserter.selectedText(), !selected.isEmpty else { return }
-        rewriteText = selected
-        rewriteInstruction = ""
-        showRewrite = true
-        open("rewrite")
+        switch RewriteGate.evaluate(accessibilityGranted: accessibilityGranted, selectedText: TextInserter.selectedText()) {
+        case .needsAccessibility:
+            openAccessibilitySettings()
+        case .needsSelection:
+            showOverlayHint(RewriteGate.needsSelectionMessage)
+        case .ready(let selected):
+            rewriteText = selected
+            rewriteInstruction = ""
+            showRewrite = true
+            open("rewrite")
+        }
     }
 
     func applyRewrite(_ action: RewriteAction) async {

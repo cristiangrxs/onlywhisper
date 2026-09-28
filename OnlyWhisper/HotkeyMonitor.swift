@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import IOKit.hidsystem
+import os
 
 /// Press and release edges for one Option key.
 ///
@@ -55,6 +56,11 @@ struct DictationKeyEdge: Sendable {
     }
 }
 
+private let hotkeyLog = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "app.onlywhisper.mac",
+    category: "hotkeys"
+)
+
 @MainActor
 final class HotkeyMonitor {
     var onPress: (() -> Void)?
@@ -88,7 +94,10 @@ final class HotkeyMonitor {
         }
         reconcileWithSystem()
         stop()
-        guard CGPreflightListenEventAccess() else { return false }
+        guard CGPreflightListenEventAccess() else {
+            hotkeyLog.error("Event tap not started: Input Monitoring is not granted")
+            return false
+        }
 
         let mask = (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.keyDown.rawValue)
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
@@ -105,6 +114,7 @@ final class HotkeyMonitor {
             callback: callback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
+            hotkeyLog.error("Event tap was rejected")
             return false
         }
         tap = created
@@ -113,6 +123,7 @@ final class HotkeyMonitor {
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: created, enable: true)
         isListening = true
+        hotkeyLog.info("Event tap started")
         reconcileWithSystem()
         return true
     }
@@ -131,6 +142,7 @@ final class HotkeyMonitor {
 
     nonisolated fileprivate func handle(type: CGEventType, event: CGEvent) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            hotkeyLog.error("Event tap disabled by the system, re-enabling")
             if let tap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }

@@ -41,6 +41,35 @@ struct RecordingOverlay: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        Group {
+            if let hint = model.overlayHint, model.phase == .idle {
+                hintCapsule(hint)
+            } else {
+                recordingCapsule
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(.snappy(duration: 0.2), value: title)
+    }
+
+    private func hintCapsule(_ hint: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "selection.pin.in.out")
+                .font(.system(size: 13, weight: .semibold))
+            Text(hint)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .fixedSize(horizontal: true, vertical: false)
+        .glassPanel(cornerRadius: 22)
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(hint)
+    }
+
+    private var recordingCapsule: some View {
         HStack(spacing: 10) {
             indicator
             Waveform(level: model.level, animated: !reduceMotion && isListening)
@@ -59,8 +88,6 @@ struct RecordingOverlay: View {
         .fixedSize(horizontal: true, vertical: false)
         .glassPanel(cornerRadius: 22)
         .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(.snappy(duration: 0.2), value: title)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(title)
     }

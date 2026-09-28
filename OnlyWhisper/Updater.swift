@@ -17,7 +17,11 @@ final class Updater {
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
-        // Sparkle refuses to start (and alerts) without a public EdDSA key, e.g. in local dev builds.
+        #if DEBUG
+        // The dev app shares nothing with the signed release, so it must not check for updates.
+        automaticallyChecksForUpdates = false
+        #else
+        // Sparkle refuses to start (and alerts) without a public EdDSA key.
         let publicKey = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String ?? ""
         if !publicKey.isEmpty {
             controller.startUpdater()
@@ -27,6 +31,7 @@ final class Updater {
             let canCheck = updater.canCheckForUpdates
             Task { @MainActor in self?.canCheckForUpdates = canCheck }
         }
+        #endif
     }
 
     var automaticallyChecksForUpdates: Bool {

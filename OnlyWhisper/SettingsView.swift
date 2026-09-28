@@ -327,17 +327,34 @@ private struct ShortcutSettings: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        let _ = model.permissionRevision
         SettingsPage {
             LabeledContent(t("Command palette", "Befehlspalette")) {
                 VStack(alignment: .leading, spacing: 6) {
                     KeyboardShortcuts.Recorder(for: .commandPalette)
+                    shortcutStatus(.commandPalette)
                     Text(t("Opens OnlyWhisper from any app.", "Öffnet OnlyWhisper aus jeder App."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
             LabeledContent(t("Rewrite selection", "Markierung umschreiben")) {
-                KeyboardShortcuts.Recorder(for: .rewriteSelection)
+                VStack(alignment: .leading, spacing: 6) {
+                    KeyboardShortcuts.Recorder(for: .rewriteSelection)
+                    shortcutStatus(.rewriteSelection)
+                    if !model.accessibilityGranted {
+                        Text(t(
+                            "Accessibility is required to read the selected text.",
+                            "Bedienungshilfen werden gebraucht, um den markierten Text zu lesen."
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        Button(t("Open System Settings", "Systemeinstellungen öffnen")) {
+                            model.openAccessibilitySettings()
+                        }
+                    }
+                }
             }
             Picker(t("Dictation key", "Diktat-Taste"), selection: Binding(
                 get: { model.settings.dictationKey },
@@ -378,6 +395,23 @@ private struct ShortcutSettings: View {
                 .font(.callout)
                 .frame(maxWidth: 260)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func shortcutStatus(_ name: KeyboardShortcuts.Name) -> some View {
+        let _ = model.shortcutRevision
+        if KeyboardShortcuts.getShortcut(for: name) == nil {
+            StatusBadge(title: t("Not set", "Nicht festgelegt"), tint: .orange)
+        } else if model.shortcutConflicts.contains(name) {
+            VStack(alignment: .leading, spacing: 4) {
+                StatusBadge(title: t("Taken by another app", "Von einer anderen App belegt"), tint: .orange)
+                Text(t("Choose different keys.", "Bitte andere Tasten wählen."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            StatusBadge(title: t("Ready", "Bereit"), tint: .green)
         }
     }
 
