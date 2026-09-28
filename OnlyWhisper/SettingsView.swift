@@ -29,6 +29,7 @@ struct MenuBarLabel: View {
 }
 
 struct SettingsView: View {
+    @Environment(AppModel.self) private var model
     @State private var tab = SettingsTab.general
 
     var body: some View {
@@ -41,6 +42,7 @@ struct SettingsView: View {
         }
         .glassWindow()
         .background(SettingsWindowFinder())
+        .onAppear { model.ensureHotkeys() }
     }
 }
 
@@ -343,6 +345,28 @@ private struct ShortcutSettings: View {
             )) {
                 ForEach(DictationKey.allCases, id: \.self) { key in
                     Text(key.title).tag(key)
+                }
+            }
+            LabeledContent(t("Status", "Status")) {
+                if model.hotkeyReady {
+                    StatusBadge(title: t("Ready", "Bereit"), tint: .green)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        StatusBadge(
+                            title: t("Input Monitoring required", "Eingabeüberwachung fehlt"),
+                            tint: .orange
+                        )
+                        Text(t(
+                            "OnlyWhisper needs this to hear the Option key in other apps.",
+                            "OnlyWhisper braucht das, um die Option-Taste in anderen Apps zu hören."
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        Button(t("Open System Settings", "Systemeinstellungen öffnen")) {
+                            model.openInputMonitoringSettings()
+                        }
+                    }
                 }
             }
             LabeledContent(t("How it works", "So geht’s")) {

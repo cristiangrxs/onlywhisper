@@ -149,6 +149,7 @@ struct CommandPaletteView: View {
             searchFocused = true
             if context == .menuBar {
                 model.bootstrap()
+                model.ensureHotkeys()
             }
         }
     }
@@ -228,7 +229,17 @@ struct CommandPaletteView: View {
 
     private func actionBar(_ selected: PaletteCommand?) -> some View {
         ActionBar {
-            AppBadge(text: statusText)
+            if showsHotkeyWarning {
+                Button {
+                    model.openInputMonitoringSettings()
+                } label: {
+                    AppBadge(text: statusText)
+                }
+                .buttonStyle(.plain)
+                .help(t("Open Input Monitoring settings", "Eingabeüberwachung öffnen"))
+            } else {
+                AppBadge(text: statusText)
+            }
         } trailing: {
             if let selected, selected.isEnabled, let primary = selected.actions.first {
                 ActionBarButton(title: primary.title, keys: ["↵"], isPrimary: true) {
@@ -252,7 +263,17 @@ struct CommandPaletteView: View {
         }
         if model.meetingActive { return t("Meeting is recording", "Meeting wird aufgenommen") }
         if !model.statusMessage.isEmpty { return model.statusMessage }
-        return "OnlyWhisper"
+        if showsHotkeyWarning {
+            return t("Allow Input Monitoring to dictate", "Eingabeüberwachung fürs Diktat erlauben")
+        }
+        return t("Ready", "Bereit")
+    }
+
+    private var showsHotkeyWarning: Bool {
+        if case .idle = model.phase, !model.meetingActive, model.statusMessage.isEmpty {
+            return !model.hotkeyReady
+        }
+        return false
     }
 
     // MARK: Keyboard

@@ -44,6 +44,7 @@ final class AppModel {
     var meetingActive = false
     var meetingStatus = ""
     var statusMessage = ""
+    private(set) var hotkeyReady = false
     var rewriteText = ""
     var rewriteInstruction = ""
     var showRewrite = false
@@ -70,6 +71,7 @@ final class AppModel {
     private var rawOpen = ""
     private var rawLog = ""
     private var watchesWindowClose = false
+    private var watchesActivation = false
 
     private init() {
         recorder.setLevelHandler { [weak self] level in
@@ -122,8 +124,8 @@ final class AppModel {
         guard !didBootstrap else { return }
         didBootstrap = true
         downloads.refreshReadyState()
-        hotkeys.keyCode = settings.dictationKey.keyCode
-        _ = hotkeys.start()
+        ensureHotkeys()
+        watchAppActivation()
         if downloads.isReady {
             settings.setupCompleted = true
             needsSetup = false
@@ -233,7 +235,22 @@ final class AppModel {
 
     func requestInputMonitoring() {
         _ = CGRequestListenEventAccess()
-        _ = hotkeys.start()
+        ensureHotkeys()
+    }
+
+    func openInputMonitoringSettings() {
+        _ = CGRequestListenEventAccess()
+        if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ListenEvent") {
+            NSWorkspace.shared.open(url)
+        }
+        ensureHotkeys()
+    }
+
+    /// Arms the Option-key listener once Input Monitoring is granted, and again after the
+    /// system disables the tap. Safe to call whenever the menu bar or Settings opens.
+    func ensureHotkeys() {
+        hotkeys.keyCode = settings.dictationKey.keyCode
+        hotkeyReady = hotkeys.start()
     }
 
     func continueSetup() async {
@@ -267,6 +284,21 @@ final class AppModel {
     func updateDictationKey(_ key: DictationKey) {
         settings.dictationKey = key
         hotkeys.keyCode = key.keyCode
+        ensureHotkeys()
+    }
+
+    private func watchAppActivation() {
+        guard !watchesActivation else { return }
+        watchesActivation = true
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                AppModel.shared.ensureHotkeys()
+            }
+        }
     }
 
     private func applyLaunchAtLogin() {
