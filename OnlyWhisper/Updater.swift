@@ -27,8 +27,9 @@ final class Updater {
             controller.startUpdater()
         }
         automaticallyChecksForUpdates = controller.updater.automaticallyChecksForUpdates
-        observation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
-            let canCheck = updater.canCheckForUpdates
+        canCheckForUpdates = controller.updater.canCheckForUpdates
+        observation = controller.updater.observe(\.canCheckForUpdates, options: [.new]) { [weak self] _, change in
+            guard let canCheck = change.newValue else { return }
             Task { @MainActor in self?.canCheckForUpdates = canCheck }
         }
         #endif

@@ -23,8 +23,13 @@ final class AudioRecorder: @unchecked Sendable {
         samples.removeAll(keepingCapacity: true)
         lock.unlock()
         input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            self?.consume(buffer)
+        try input.installAudioTap(
+            onBus: 0,
+            bufferSize: tapBufferFrameCount(for: inputFormat),
+            format: inputFormat
+        ) { [weak self] buffer, _ in
+            let pcm = AVAudioPCMBuffer(copying: buffer)
+            self?.consume(pcm)
         }
         engine.prepare()
         try engine.start()
@@ -51,6 +56,12 @@ final class AudioRecorder: @unchecked Sendable {
         let captured = samples
         lock.unlock()
         return captured
+    }
+
+    /// Apple accepts tap buffers of 100–400 ms. A fixed frame count falls outside that at 48 kHz.
+    private func tapBufferFrameCount(for format: AVAudioFormat) -> AVAudioFrameCount {
+        let frames = format.sampleRate * 0.15
+        return AVAudioFrameCount(max(1, frames.rounded()))
     }
 
     private func consume(_ buffer: AVAudioPCMBuffer) {
