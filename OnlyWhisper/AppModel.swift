@@ -158,8 +158,7 @@ final class AppModel {
 
     /// Settings is a normal window. A menu-bar app stays behind other apps until it becomes a regular, active app.
     func presentSettings(open: () -> Void) {
-        NSApp.setActivationPolicy(.regular)
-        NSApp.unhide(nil)
+        becomeRegularApp()
         open()
         orderSettingsFront()
     }
@@ -168,29 +167,35 @@ final class AppModel {
         orderFront { $0.identifier == AppWindows.settings }
     }
 
-    /// A menu-bar app opened from the non-activating palette is not allowed to activate cooperatively, so force it.
+    /// Opens a document window in front, then leaves it at the normal level so other apps can cover it.
     private func orderFront(windowMatching matches: @escaping @MainActor (NSWindow) -> Bool) {
-        NSApp.setActivationPolicy(.regular)
-        NSApp.unhide(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        becomeRegularApp()
         Task { @MainActor in
             for _ in 0..<12 {
                 guard let window = NSApp.windows.first(where: matches) else {
                     try? await Task.sleep(for: .milliseconds(40))
                     continue
                 }
-                window.collectionBehavior.insert(.moveToActiveSpace)
-                window.level = .floating
-                window.makeKeyAndOrderFront(nil)
-                window.orderFrontRegardless()
-                NSApp.activate(ignoringOtherApps: true)
-                if NSApp.isActive {
-                    window.level = .normal
-                    window.orderFrontRegardless()
-                }
+                bringToFront(window)
+                // Activation from a menu-bar extra can land a tick later than the window.
+                await Task.yield()
+                bringToFront(window)
                 return
             }
         }
+    }
+
+    private func becomeRegularApp() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.unhide(nil)
+        NSApp.activate()
+    }
+
+    private func bringToFront(_ window: NSWindow) {
+        window.level = .normal
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate()
     }
 
     private func watchWindowClose() {
