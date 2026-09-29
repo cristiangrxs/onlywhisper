@@ -268,7 +268,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development: Aurel-Cristian Grosu (745CGQ3937)";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -277,7 +277,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.4;
+				MARKETING_VERSION = 1.0.5;
 				PRODUCT_BUNDLE_IDENTIFIER = app.onlywhisper.mac.dev;
 				PRODUCT_MODULE_NAME = OnlyWhisper;
 				PRODUCT_NAME = "OnlyWhisper Dev";
@@ -297,7 +297,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -306,7 +306,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.4;
+				MARKETING_VERSION = 1.0.5;
 				PRODUCT_BUNDLE_IDENTIFIER = app.onlywhisper.mac;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SPARKLE_PUBLIC_ED_KEY = "Y6v3pxNNBiHAsPbV6LwCufkEFrsfdSYN2mlNhObtA7w=";
