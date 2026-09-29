@@ -2,54 +2,82 @@ import XCTest
 @testable import OnlyWhisper
 
 final class DictationSessionTests: XCTestCase {
-    func testPartialTextAppears() {
+    func testOpenTextGrowsWhileSpeaking() {
         var session = DictationSession()
-        session.updateOpenText("Hallo Welt")
-        XCTAssertEqual(session.visibleText, "Hallo Welt")
-        XCTAssertEqual(session.committed, "")
+        XCTAssertTrue(session.updateOpen("um so"))
+        XCTAssertTrue(session.updateOpen("um so yeah let's meet"))
+        XCTAssertEqual(session.text, "um so yeah let's meet")
+        XCTAssertEqual(session.settled, "")
     }
 
-    func testPauseCommitsPolishedSentence() {
+    func testOpenEndingCorrectsItself() {
         var session = DictationSession()
-        session.updateOpenText("äh hallo")
-        let request = session.polishRequest(paused: true)
-        XCTAssertEqual(request?.sentence, "äh hallo")
-        XCTAssertTrue(session.acceptPolish("Hallo.", generation: request!.generation))
-        XCTAssertEqual(session.visibleText, "Hallo.")
-        XCTAssertEqual(session.openText, "")
+        session.updateOpen("let's meet on tues")
+        XCTAssertTrue(session.updateOpen("let's meet on Tuesday"))
+        XCTAssertEqual(session.text, "let's meet on Tuesday")
     }
 
-    func testPunctuationKeepsTheUnfinishedTail() {
+    func testUnchangedUpdateReportsNoChange() {
         var session = DictationSession()
-        session.updateOpenText("Hallo. Wie geht")
-        let request = session.polishRequest(paused: false)
-        XCTAssertEqual(request?.sentence, "Hallo.")
-        XCTAssertTrue(session.acceptPolish("Hallo.", generation: request!.generation))
-        XCTAssertEqual(session.committed, "Hallo.")
-        XCTAssertEqual(session.openText, "Wie geht")
-        XCTAssertEqual(session.visibleText, "Hallo. Wie geht")
+        session.updateOpen("Hallo Welt")
+        XCTAssertFalse(session.updateOpen(" Hallo Welt "))
     }
 
-    func testStalePolishDoesNotOverwrite() {
+    func testSettlingKeepsTheTextAndStartsANewSegment() {
         var session = DictationSession()
-        session.updateOpenText("Hallo")
-        let request = session.polishRequest(paused: true)
-        session.updateOpenText("Hallo Welt")
-        XCTAssertFalse(session.acceptPolish("Hallo.", generation: request!.generation))
-        XCTAssertEqual(session.visibleText, "Hallo Welt")
-        XCTAssertEqual(session.committed, "")
+        session.updateOpen("um so yeah")
+        session.settleOpen()
+        XCTAssertEqual(session.settled, "um so yeah")
+        XCTAssertEqual(session.open, "")
+        session.updateOpen("let's meet")
+        XCTAssertEqual(session.text, "um so yeah let's meet")
+    }
+
+    func testSettlingAnEmptySegmentAddsNothing() {
+        var session = DictationSession()
+        session.updateOpen("Hallo")
+        session.settleOpen()
+        session.settleOpen()
+        XCTAssertEqual(session.text, "Hallo")
     }
 
     func testEscapeClearsTheDraft() {
         var session = DictationSession()
-        session.updateOpenText("Hallo")
-        _ = session.polishRequest(paused: true)
-        session.acceptPolish("Hallo.", generation: session.generation)
-        session.updateOpenText("noch etwas")
+        session.updateOpen("Hallo")
+        session.settleOpen()
+        session.updateOpen("noch etwas")
         session.reset()
-        XCTAssertEqual(session.visibleText, "")
-        XCTAssertEqual(session.committed, "")
-        XCTAssertEqual(session.openText, "")
-        XCTAssertNil(session.polishRequest(paused: true))
+        XCTAssertEqual(session.text, "")
+    }
+
+    func testShortTextIsPolishedInOnePass() {
+        XCTAssertEqual(DictationSession.polishChunks("Hallo. Wie geht es?", limit: 100), ["Hallo. Wie geht es?"])
+        XCTAssertEqual(DictationSession.polishChunks("  ", limit: 100), [])
+    }
+
+    func testLongTextSplitsAtSentenceEnds() {
+        let chunks = DictationSession.polishChunks("Erster Satz. Zweiter Satz! Dritter ohne Ende", limit: 26)
+        XCTAssertEqual(chunks, ["Erster Satz. Zweiter Satz!", "Dritter ohne Ende"])
+    }
+
+    func testTrailingPauseSettlesTheWholeSegment() {
+        let speech = [Float](repeating: 0.2, count: 16_000)
+        let silence = [Float](repeating: 0, count: 9_600)
+        let samples = speech + silence
+        XCTAssertEqual(SpeechPause.settlePoint(in: samples, from: 0, to: samples.count), samples.count)
+    }
+
+    func testOngoingSpeechStaysOpen() {
+        let samples = [Float](repeating: 0.2, count: 3 * 16_000)
+        XCTAssertNil(SpeechPause.settlePoint(in: samples, from: 0, to: samples.count))
+    }
+
+    func testLongSegmentSettlesAtTheQuietestRecentFrame() {
+        var samples = [Float](repeating: 0.2, count: 9 * 16_000)
+        let gap = 7 * 16_000
+        for index in gap..<(gap + 1_600) {
+            samples[index] = 0.01
+        }
+        XCTAssertEqual(SpeechPause.settlePoint(in: samples, from: 0, to: samples.count), gap + 800)
     }
 }

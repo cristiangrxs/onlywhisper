@@ -5,7 +5,7 @@ import SwiftUI
 final class OverlayPanel {
     static let shared = OverlayPanel()
     private var panel: NSPanel?
-    private let size = NSSize(width: 320, height: 76)
+    private let size = NSSize(width: 360, height: 112)
 
     func show() {
         if panel == nil {
@@ -44,12 +44,36 @@ struct RecordingOverlay: View {
         Group {
             if let hint = model.overlayHint, model.phase == .idle {
                 hintCapsule(hint)
+            } else if model.dictationInserted, model.phase == .idle {
+                insertedCapsule
             } else {
                 recordingCapsule
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(.snappy(duration: 0.2), value: title)
+        // Bottom-aligned so the capsule stays just above the pointer when the preview line appears.
+        .padding(.bottom, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: title)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: model.dictationInserted)
+    }
+
+    private var insertedCapsule: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.green)
+            Text(t("Inserted", "Eingefügt"))
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .fixedSize(horizontal: true, vertical: false)
+        .glassPanel(cornerRadius: 22)
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+        .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.95)))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(t("Inserted", "Eingefügt"))
     }
 
     private func hintCapsule(_ hint: String) -> some View {
@@ -70,26 +94,41 @@ struct RecordingOverlay: View {
     }
 
     private var recordingCapsule: some View {
-        HStack(spacing: 10) {
-            indicator
-            Waveform(level: model.level, animated: !reduceMotion && isListening)
-                .frame(width: 52, height: 22)
-                .accessibilityHidden(true)
-            Text(title)
-                .font(.system(size: 13, weight: .semibold))
-                .lineLimit(1)
-                .contentTransition(.opacity)
-            Spacer(minLength: 4)
-            KeyCap("esc")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                indicator
+                Waveform(level: model.level, animated: !reduceMotion && isListening)
+                    .frame(width: 52, height: 22)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                    .contentTransition(.opacity)
+                Spacer(minLength: 4)
+                KeyCap("esc")
+            }
+            .frame(height: 44)
+            if !model.livePreview.isEmpty {
+                Text(model.livePreview)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .frame(maxWidth: 280, alignment: .leading)
+                    .padding(.bottom, 10)
+            }
         }
         .padding(.leading, 14)
         .padding(.trailing, 10)
-        .frame(height: 44)
-        .fixedSize(horizontal: true, vertical: false)
+        .fixedSize(horizontal: true, vertical: true)
         .glassPanel(cornerRadius: 22)
         .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(title)
+        .accessibilityLabel(accessibilityText)
+    }
+
+    private var accessibilityText: String {
+        model.livePreview.isEmpty ? title : "\(title). \(model.livePreview)"
     }
 
     @ViewBuilder

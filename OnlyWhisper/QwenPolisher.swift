@@ -6,12 +6,18 @@ import Tokenizers
 
 actor QwenPolisher {
     private var container: ModelContainer?
+    private var loading: Task<ModelContainer, Error>?
+    private var generation = 0
 
     func polish(raw: String, kind: PolishKind) async throws -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return trimmed }
         let container = try await load()
-        let parameters = GenerateParameters(maxTokens: 480, maxKVSize: 2048, temperature: 0.2)
+        let parameters = GenerateParameters(
+            maxTokens: max(480, trimmed.count / 2),
+            maxKVSize: 4096,
+            temperature: 0.2
+        )
         let session = ChatSession(container, instructions: kind.system, generateParameters: parameters)
         let reply = try await session.respond(to: String(trimmed.prefix(6000)))
         let cleaned = reply
@@ -20,18 +26,46 @@ actor QwenPolisher {
         return cleaned.isEmpty ? trimmed : cleaned
     }
 
-    func unload() {
-        container = nil
+    /// Loads the model while the user is still speaking, so polishing starts right after release.
+    func prewarm() async {
+        _ = try? await load()
     }
 
+    func unload() {
+        generation += 1
+        container = nil
+        loading = nil
+    }
+
+    /// Concurrent callers share one load. A load that finishes after `unload()` is handed back but not kept.
     private func load() async throws -> ModelContainer {
         if let container { return container }
-        let loaded = try await LLMModelFactory.shared.loadContainer(
-            from: ModelPaths.qwen,
-            using: #huggingFaceTokenizerLoader()
-        )
-        container = loaded
-        return loaded
+        let task: Task<ModelContainer, Error>
+        if let loading {
+            task = loading
+        } else {
+            task = Task {
+                try await LLMModelFactory.shared.loadContainer(
+                    from: ModelPaths.qwen,
+                    using: #huggingFaceTokenizerLoader()
+                )
+            }
+            loading = task
+        }
+        let started = generation
+        do {
+            let loaded = try await task.value
+            if generation == started {
+                container = loaded
+                loading = nil
+            }
+            return loaded
+        } catch {
+            if generation == started {
+                loading = nil
+            }
+            throw error
+        }
     }
 }
 

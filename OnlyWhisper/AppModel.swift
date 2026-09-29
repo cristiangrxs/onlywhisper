@@ -51,6 +51,10 @@ final class AppModel {
     /// Bumps whenever shortcuts are checked, so Settings refreshes even if the conflict set stays empty.
     private(set) var shortcutRevision = 0
     var overlayHint: String?
+    /// Live words for the capsule, set only while the focused field cannot be written live.
+    var livePreview = ""
+    /// Briefly true after a dictation lands, so the capsule can confirm it before hiding.
+    var dictationInserted = false
     var rewriteText = ""
     var rewriteInstruction = ""
     var showRewrite = false
@@ -69,13 +73,10 @@ final class AppModel {
     private var transcribedUntil: Int = 0
     private var meetingTimer: Task<Void, Never>?
     private var dictationTask: Task<Void, Never>?
-    private var polishTask: Task<Void, Never>?
+    private var insertedTask: Task<Void, Never>?
     private var dictationEpoch = 0
     private var dictationCursor = 0
-    private var dictationActivity = Date()
     private var dictationSession = DictationSession()
-    private var rawOpen = ""
-    private var rawLog = ""
     private var watchesWindowClose = false
     private var watchesActivation = false
     private var watchesShortcuts = false
@@ -331,6 +332,7 @@ final class AppModel {
     }
 
     func showOverlayHint(_ text: String) {
+        clearInsertedConfirmation()
         hintTask?.cancel()
         overlayHint = text
         OverlayPanel.shared.show()
@@ -434,14 +436,11 @@ final class AppModel {
         }
         dictationEpoch += 1
         dictationTask?.cancel()
-        polishTask?.cancel()
-        polishTask = nil
-        dictationSession = DictationSession()
-        rawOpen = ""
-        rawLog = ""
+        dictationSession.reset()
         dictationCursor = 0
-        dictationActivity = .now
         isSmoothing = false
+        livePreview = ""
+        clearInsertedConfirmation()
         hintTask?.cancel()
         overlayHint = nil
         TextInserter.beginInsertion()
@@ -451,6 +450,9 @@ final class AppModel {
             OverlayPanel.shared.show()
             let epoch = dictationEpoch
             dictationTask = Task { await runDictationLoop(epoch: epoch) }
+            if settings.polishEnabled {
+                Task { await qwen.prewarm() }
+            }
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -461,13 +463,10 @@ final class AppModel {
         dictationEpoch += 1
         dictationTask?.cancel()
         dictationTask = nil
-        polishTask?.cancel()
-        polishTask = nil
         _ = recorder.stop()
         TextInserter.revertInsertion()
         dictationSession.reset()
-        rawOpen = ""
-        rawLog = ""
+        livePreview = ""
         isSmoothing = false
         phase = .idle
         level = 0
@@ -481,120 +480,131 @@ final class AppModel {
         }
     }
 
+    /// The raw words are already in the field. The writing model runs once over all of them and replaces the draft.
     private func finishDictation() async {
         guard phase == .recording || phase == .handsFree else { return }
         dictationEpoch += 1
+        let epoch = dictationEpoch
         dictationTask?.cancel()
         dictationTask = nil
-        polishTask?.cancel()
-        polishTask = nil
         phase = .working(t("Smoothing", "Glättet"))
         let samples = recorder.stop()
-        await appendNewAudio(samples, from: dictationCursor, epoch: dictationEpoch)
-        if settings.polishEnabled, !dictationSession.openText.isEmpty {
+        level = 0
+        await transcribeOpenAudio(samples, epoch: epoch, final: true)
+        dictationSession.settleOpen()
+        let raw = dictationSession.text
+        var finished = ruled(raw)
+        if settings.polishEnabled, !finished.isEmpty {
             isSmoothing = true
-            let polished = (try? await qwen.polish(raw: dictationSession.openText, kind: .dictation))
-                ?? dictationSession.openText
-            await qwen.unload()
-            dictationSession.commitFinal(polished)
+            finished = await polishDictation(finished)
             isSmoothing = false
         }
-        let finished = dictationSession.visibleText
-        if finished.isEmpty {
-            TextInserter.revertInsertion()
-        } else {
+        await qwen.unload()
+        let landed = !finished.isEmpty
+        if landed {
             TextInserter.replaceInsertion(with: finished, allowPasteFallback: true)
-            history.add(source: "dictation", raw: rawLog, polished: finished)
+            history.add(source: "dictation", raw: raw, polished: finished)
+        } else {
+            TextInserter.revertInsertion()
         }
         if !meetingActive {
             await speech.unload()
         }
         dictationSession.reset()
-        rawOpen = ""
-        rawLog = ""
+        livePreview = ""
         phase = .idle
-        level = 0
-        OverlayPanel.shared.hide()
+        if landed {
+            confirmInsertion()
+        } else {
+            OverlayPanel.shared.hide()
+        }
     }
 
     private func runDictationLoop(epoch: Int) async {
         while epoch == dictationEpoch, !Task.isCancelled {
-            try? await Task.sleep(for: .milliseconds(300))
-            guard epoch == dictationEpoch else { return }
-            let samples = recorder.snapshot()
-            let start = dictationCursor
-            if samples.count - start >= 11_200 {
-                _ = await appendNewAudio(samples, from: start, epoch: epoch)
-            }
-            guard epoch == dictationEpoch else { return }
-            let paused = Date().timeIntervalSince(dictationActivity) >= 0.9
-            startPolishIfNeeded(paused: paused, epoch: epoch)
+            try? await Task.sleep(for: .milliseconds(400))
+            guard epoch == dictationEpoch, !Task.isCancelled else { return }
+            await transcribeOpenAudio(recorder.snapshot(), epoch: epoch, final: false)
         }
     }
 
-    @discardableResult
-    private func appendNewAudio(_ samples: [Float], from start: Int, epoch: Int) async -> Bool {
-        guard samples.count - start > 1_600 else { return false }
+    /// Transcribes the open segment again and writes the raw words into the field.
+    /// A pause, a long segment, or the end of the dictation freezes it so the next pass starts after it.
+    private func transcribeOpenAudio(_ samples: [Float], epoch: Int, final: Bool) async {
         let end = samples.count
-        do {
-            let piece = try await speech.transcribe(
-                samples: Array(samples[start..<end]),
-                choice: settings.language
-            )
-            guard epoch == dictationEpoch else { return false }
-            dictationCursor = end
-            let trimmed = piece.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return false }
-            rawOpen = joined(rawOpen, trimmed)
-            rawLog = joined(rawLog, trimmed)
-            dictationSession.updateOpenText(ruled(rawOpen))
-            dictationActivity = .now
-            TextInserter.replaceInsertion(with: dictationSession.visibleText)
-            return true
-        } catch {
-            guard epoch == dictationEpoch else { return false }
-            statusMessage = error.localizedDescription
-            return false
+        var start = dictationCursor
+        var changed = false
+        defer {
+            if changed, epoch == dictationEpoch, !final {
+                publishLive()
+            }
+        }
+        while epoch == dictationEpoch, end - start >= Self.minimumSpeechSamples {
+            let cut = final ? end : SpeechPause.settlePoint(in: samples, from: start, to: end)
+            let stop = cut ?? end
+            guard let heard = await transcribe(samples, from: start, to: stop, epoch: epoch) else { return }
+            if !heard.isEmpty, dictationSession.updateOpen(heard) {
+                changed = true
+            }
+            guard cut != nil else { return }
+            dictationSession.settleOpen()
+            dictationCursor = stop
+            start = stop
         }
     }
 
-    private func startPolishIfNeeded(paused: Bool, epoch: Int) {
-        guard settings.polishEnabled, polishTask == nil else { return }
-        guard let request = dictationSession.polishRequest(paused: paused) else { return }
-        isSmoothing = true
-        polishTask = Task { [weak self] in
-            guard let self else { return }
-            defer {
-                self.polishTask = nil
-                if self.dictationEpoch == epoch {
-                    self.isSmoothing = false
-                }
-            }
-            do {
-                let polished = try await self.qwen.polish(raw: request.sentence, kind: .dictation)
-                await self.qwen.unload()
-                guard epoch == self.dictationEpoch else { return }
-                guard self.dictationSession.acceptPolish(polished, generation: request.generation) else { return }
-                self.rawOpen = self.dictationSession.openText
-                self.dictationActivity = .now
-                TextInserter.replaceInsertion(with: self.dictationSession.visibleText)
-            } catch {
-                guard epoch == self.dictationEpoch else { return }
-                self.statusMessage = error.localizedDescription
+    /// Parakeet rejects anything shorter than 0.3 s.
+    private static let minimumSpeechSamples = 4_800
+
+    private func transcribe(_ samples: [Float], from start: Int, to end: Int, epoch: Int) async -> String? {
+        do {
+            let text = try await speech.transcribe(samples: Array(samples[start..<end]), choice: settings.language)
+            guard epoch == dictationEpoch else { return nil }
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            guard epoch == dictationEpoch else { return nil }
+            statusMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    private func publishLive() {
+        let text = dictationSession.text
+        let written = TextInserter.replaceInsertion(with: text)
+        livePreview = written ? "" : text
+    }
+
+    /// Long dictations go through in pieces so none is cut off. A piece that fails keeps its unpolished text.
+    private func polishDictation(_ text: String) async -> String {
+        var result = ""
+        for piece in DictationSession.polishChunks(text, limit: 1_500) {
+            let polished = (try? await qwen.polish(raw: piece, kind: .dictation)) ?? piece
+            result = DictationSession.joined(result, polished)
+        }
+        return result
+    }
+
+    private func confirmInsertion() {
+        insertedTask?.cancel()
+        dictationInserted = true
+        insertedTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard let self, !Task.isCancelled else { return }
+            self.dictationInserted = false
+            if self.phase == .idle, self.overlayHint == nil {
+                OverlayPanel.shared.hide()
             }
         }
+    }
+
+    private func clearInsertedConfirmation() {
+        insertedTask?.cancel()
+        insertedTask = nil
+        dictationInserted = false
     }
 
     private func ruled(_ text: String) -> String {
         dictionary.dictionary.apply(to: RulePolisher.apply(text))
-    }
-
-    private func joined(_ left: String, _ right: String) -> String {
-        let left = left.trimmingCharacters(in: .whitespacesAndNewlines)
-        let right = right.trimmingCharacters(in: .whitespacesAndNewlines)
-        if left.isEmpty { return right }
-        if right.isEmpty { return left }
-        return left + " " + right
     }
 
     func beginRewrite() {

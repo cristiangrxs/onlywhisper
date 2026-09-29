@@ -1,99 +1,132 @@
 import Foundation
 
-/// Tracks dictated text that is already settled and the sentence still open for live editing.
+/// Raw words heard during one dictation. Settled segments stay fixed, the open segment is replaced
+/// every time its audio is transcribed again, so words cut off mid-way correct themselves.
 struct DictationSession: Equatable, Sendable {
-    private(set) var committed: String = ""
-    private(set) var openText: String = ""
-    private(set) var generation: Int = 0
-    private var requestedGeneration: Int?
-    private var pendingRemainder: String = ""
+    private(set) var settled: String = ""
+    private(set) var open: String = ""
 
-    var visibleText: String {
-        joined(committed, openText)
+    var text: String {
+        Self.joined(settled, open)
     }
 
-    /// Replaces the uncommitted sentence. A change invalidates a polish that is already running.
-    mutating func updateOpenText(_ text: String) {
-        let next = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard next != openText else { return }
-        openText = next
-        generation += 1
-        requestedGeneration = nil
-        pendingRemainder = ""
-    }
-
-    /// The open sentence to send to the writing model, when a pause or punctuation makes it safe to settle.
-    mutating func polishRequest(paused: Bool) -> (generation: Int, sentence: String)? {
-        let text = openText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
-        let sentence: String
-        let remainder: String
-        if let split = Self.splitSentence(text) {
-            sentence = split.ready
-            remainder = split.remainder
-        } else if paused {
-            sentence = text
-            remainder = ""
-        } else {
-            return nil
-        }
-        guard requestedGeneration != generation else { return nil }
-        requestedGeneration = generation
-        pendingRemainder = remainder
-        return (generation, sentence)
-    }
-
-    /// Settles a polish result only when the open sentence has not moved on.
+    /// Replaces the open segment. Returns whether the visible text changed.
     @discardableResult
-    mutating func acceptPolish(_ polished: String, generation: Int) -> Bool {
-        guard generation == self.generation else { return false }
-        let cleaned = polished.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return false }
-        committed = joined(committed, cleaned)
-        openText = pendingRemainder
-        pendingRemainder = ""
-        self.generation += 1
-        requestedGeneration = nil
+    mutating func updateOpen(_ text: String) -> Bool {
+        let next = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard next != open else { return false }
+        open = next
         return true
     }
 
-    /// Settles whatever is still open when the user stops dictating.
-    mutating func commitFinal(_ polished: String) {
-        let cleaned = polished.trimmingCharacters(in: .whitespacesAndNewlines)
-        let piece = cleaned.isEmpty ? openText : cleaned
-        if !piece.isEmpty {
-            committed = joined(committed, piece)
-        }
-        openText = ""
-        pendingRemainder = ""
-        generation += 1
-        requestedGeneration = nil
+    /// Freezes the open segment once its audio will not be transcribed again.
+    mutating func settleOpen() {
+        settled = Self.joined(settled, open)
+        open = ""
     }
 
     mutating func reset() {
-        committed = ""
-        openText = ""
-        pendingRemainder = ""
-        generation += 1
-        requestedGeneration = nil
+        settled = ""
+        open = ""
     }
 
-    private static func splitSentence(_ text: String) -> (ready: String, remainder: String)? {
-        guard let index = text.lastIndex(where: { $0 == "." || $0 == "!" || $0 == "?" }) else { return nil }
-        let ready = text[...index].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !ready.isEmpty else { return nil }
-        let after = text.index(after: index)
-        let remainder = after < text.endIndex
-            ? text[after...].trimmingCharacters(in: .whitespacesAndNewlines)
-            : ""
-        return (ready, remainder)
+    /// Splits text at sentence ends into pieces the writing model can handle in one pass.
+    /// A sentence longer than `limit` becomes its own piece rather than being cut.
+    static func polishChunks(_ text: String, limit: Int) -> [String] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > limit else { return trimmed.isEmpty ? [] : [trimmed] }
+        var chunks: [String] = []
+        var current = ""
+        for sentence in sentences(trimmed) {
+            let candidate = joined(current, sentence)
+            if candidate.count > limit, !current.isEmpty {
+                chunks.append(current)
+                current = sentence
+            } else {
+                current = candidate
+            }
+        }
+        if !current.isEmpty {
+            chunks.append(current)
+        }
+        return chunks
     }
 
-    private func joined(_ left: String, _ right: String) -> String {
+    static func joined(_ left: String, _ right: String) -> String {
         let left = left.trimmingCharacters(in: .whitespacesAndNewlines)
         let right = right.trimmingCharacters(in: .whitespacesAndNewlines)
         if left.isEmpty { return right }
         if right.isEmpty { return left }
         return left + " " + right
+    }
+
+    private static func sentences(_ text: String) -> [String] {
+        var result: [String] = []
+        var current = ""
+        for character in text {
+            current.append(character)
+            if character == "." || character == "!" || character == "?" {
+                let sentence = current.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !sentence.isEmpty { result.append(sentence) }
+                current = ""
+            }
+        }
+        let rest = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !rest.isEmpty { result.append(rest) }
+        return result
+    }
+}
+
+/// Picks where the open audio segment can be frozen without cutting through a word.
+enum SpeechPause {
+    static let sampleRate = 16_000
+    private static let frame = sampleRate / 10
+    private static let pauseFrames = 6
+    private static let minSegment = sampleRate
+    private static let maxSegment = 8 * sampleRate
+    private static let searchWindow = 3 * sampleRate
+
+    /// The sample index to settle at, or nil while the segment should stay open.
+    /// A trailing pause settles everything. A segment past the length cap settles at its quietest recent frame.
+    static func settlePoint(in samples: [Float], from start: Int, to end: Int) -> Int? {
+        let length = end - start
+        guard length >= minSegment else { return nil }
+        let energies = frameEnergies(samples, from: start, to: end)
+        guard !energies.isEmpty else { return nil }
+        let threshold = silenceThreshold(energies)
+        if energies.suffix(pauseFrames).count == pauseFrames,
+           energies.suffix(pauseFrames).allSatisfy({ $0 < threshold }) {
+            return end
+        }
+        guard length >= maxSegment else { return nil }
+        let firstFrame = max(0, energies.count - searchWindow / frame)
+        let lastFrame = energies.count - 3
+        guard lastFrame > firstFrame else { return end }
+        var quietest = firstFrame
+        for index in firstFrame..<lastFrame where energies[index] < energies[quietest] {
+            quietest = index
+        }
+        return start + quietest * frame + frame / 2
+    }
+
+    private static func frameEnergies(_ samples: [Float], from start: Int, to end: Int) -> [Float] {
+        var energies: [Float] = []
+        var index = start
+        while index + frame <= end {
+            var sum: Float = 0
+            for sample in samples[index..<(index + frame)] {
+                sum += sample * sample
+            }
+            energies.append((sum / Float(frame)).squareRoot())
+            index += frame
+        }
+        return energies
+    }
+
+    /// Relative to the loudest speech in the segment, so quiet microphones still find pauses.
+    private static func silenceThreshold(_ energies: [Float]) -> Float {
+        let sorted = energies.sorted()
+        let loud = sorted[min(sorted.count - 1, Int(Float(sorted.count) * 0.9))]
+        return max(0.004, loud * 0.2)
     }
 }

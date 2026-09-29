@@ -22,14 +22,17 @@ enum TextInserter {
     }
 
     /// Replaces the text this dictation already wrote. Paste is only used when the field cannot be edited directly.
-    static func replaceInsertion(with text: String, allowPasteFallback: Bool = false) {
+    /// Returns false when nothing reached the field, so the caller can show the text elsewhere.
+    @discardableResult
+    static func replaceInsertion(with text: String, allowPasteFallback: Bool = false) -> Bool {
         if let field, replaceOwned(text, in: field) {
             insertedWithPaste = false
-            return
+            return true
         }
-        guard allowPasteFallback, !text.isEmpty, !insertedWithPaste, insertedRange == nil else { return }
+        guard allowPasteFallback, !text.isEmpty, !insertedWithPaste, insertedRange == nil else { return false }
         paste(text)
         insertedWithPaste = true
+        return true
     }
 
     /// Removes the text this dictation inserted.
@@ -61,15 +64,26 @@ enum TextInserter {
         let length = (text as NSString).length
         if let existing = insertedRange {
             guard setSelectedRange(existing, of: element) else { return false }
-            guard setSelectedText(text, of: element) else { return false }
+            guard setSelectedText(text, of: element), landed(at: existing.location, length: length, in: element) else {
+                return false
+            }
             insertedRange = CFRange(location: existing.location, length: length)
             return true
         }
-        let cursor = selectedRange(of: element) ?? CFRange(location: 0, length: 0)
-        guard setSelectedRange(CFRange(location: cursor.location, length: cursor.length), of: element) else { return false }
-        guard setSelectedText(text, of: element) else { return false }
+        guard let cursor = selectedRange(of: element) else { return false }
+        guard setSelectedRange(cursor, of: element) else { return false }
+        guard setSelectedText(text, of: element), landed(at: cursor.location, length: length, in: element) else {
+            return false
+        }
         insertedRange = CFRange(location: cursor.location, length: length)
         return true
+    }
+
+    /// Some fields, such as the Mail compose body, report success but drop the text. After a real write the
+    /// selection ends right behind the new text.
+    private static func landed(at location: Int, length: Int, in element: AXUIElement) -> Bool {
+        guard let after = selectedRange(of: element) else { return false }
+        return after.location + after.length == location + length
     }
 
     private static func focusedElement() -> AXUIElement? {
