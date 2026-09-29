@@ -2,22 +2,31 @@
 #
 # Builds, signs, notarizes and publishes an OnlyWhisper release.
 #
-# Usage:
-#   scripts/release.sh [--notes path/to/notes.md] [--draft] [--skip-notarize] [--skip-sign]
+# Next release:
+#   scripts/release.sh --bump-patch
 #
-# Required environment:
-#   DEVELOPER_ID     Signing identity, e.g. "Developer ID Application: Jane Doe (ABCDE12345)"
-#   TEAM_ID          Apple Developer team ID, e.g. ABCDE12345
-#   NOTARY_PROFILE   Keychain profile created with `xcrun notarytool store-credentials`
+# That raises the patch version and the Sparkle build number, commits, pushes,
+# then archives, signs, notarizes and publishes. Signing and notarization use
+# the defaults below. The app-specific password stays in the keychain profile.
+#
+# Usage:
+#   scripts/release.sh [--bump-patch] [--notes path/to/notes.md] [--draft] [--skip-notarize] [--skip-sign]
+#
+# Defaults (override with the environment):
+#   DEVELOPER_ID     Developer ID Application: Aurel-Cristian Grosu (65QU3X8PHA)
+#   TEAM_ID          65QU3X8PHA
+#   NOTARY_PROFILE   onlywhisper
 #
 # Optional environment:
 #   RELEASES_REPO    Public GitHub repo for release assets (default: cristiangrxs/onlywhisper-releases)
 #   SPARKLE_BIN      Directory containing Sparkle's sign_update tool (auto-detected from DerivedData)
 #
-# Before every release, bump MARKETING_VERSION and CURRENT_PROJECT_VERSION in Xcode.
-# Sparkle compares CURRENT_PROJECT_VERSION (CFBundleVersion), so it must always increase.
+# --bump-patch requires a clean main branch that matches origin/main.
+# Without it, the current MARKETING_VERSION is released as it is.
+# Sparkle compares CURRENT_PROJECT_VERSION (CFBundleVersion), so a bump always raises it.
 # One-time setup: run Sparkle's generate_keys (stores the private key in the login keychain)
 # and put the printed public key into the SPARKLE_PUBLIC_ED_KEY build setting.
+# The notary password is stored once with `xcrun notarytool store-credentials "onlywhisper"`.
 #
 # --skip-sign builds an ad-hoc signed DMG and skips notarization and Sparkle.
 # macOS will ask each downloader to allow the app in Privacy & Security.
@@ -30,14 +39,19 @@ cd "$ROOT"
 PROJECT="OnlyWhisper.xcodeproj"
 SCHEME="OnlyWhisper"
 APP_NAME="OnlyWhisper"
+PBX="$ROOT/OnlyWhisper.xcodeproj/project.pbxproj"
 RELEASES_REPO="${RELEASES_REPO:-cristiangrxs/onlywhisper-releases}"
 BUILD_DIR="$ROOT/build/release"
 DERIVED_DATA="$ROOT/DerivedData"
+DEVELOPER_ID="${DEVELOPER_ID:-Developer ID Application: Aurel-Cristian Grosu (65QU3X8PHA)}"
+TEAM_ID="${TEAM_ID:-65QU3X8PHA}"
+NOTARY_PROFILE="${NOTARY_PROFILE:-onlywhisper}"
 
 NOTES_FILE=""
 DRAFT_FLAG=""
 SKIP_NOTARIZE=0
 SKIP_SIGN=0
+BUMP_PATCH=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -45,7 +59,8 @@ while [[ $# -gt 0 ]]; do
     --draft) DRAFT_FLAG="--draft"; shift ;;
     --skip-notarize) SKIP_NOTARIZE=1; shift ;;
     --skip-sign) SKIP_SIGN=1; SKIP_NOTARIZE=1; shift ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    --bump-patch) BUMP_PATCH=1; shift ;;
+    -h|--help) sed -n '2,/^set -euo pipefail/p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -53,16 +68,67 @@ done
 step() { printf '\n\033[1;35m==> %s\033[0m\n' "$1"; }
 fail() { printf '\033[1;31merror:\033[0m %s\n' "$1" >&2; exit 1; }
 
-if [[ $SKIP_SIGN -eq 0 ]]; then
-  for var in DEVELOPER_ID TEAM_ID; do
-    [[ -n "${!var:-}" ]] || fail "$var is not set"
-  done
-  if [[ $SKIP_NOTARIZE -eq 0 && -z "${NOTARY_PROFILE:-}" ]]; then
-    fail "NOTARY_PROFILE is not set (or pass --skip-notarize for a local test build)"
+unique_setting() {
+  local key="$1"
+  local values
+  values="$(grep -E "${key} = " "$PBX" | sed -E "s/.*${key} = ([^;]+);/\\1/" | sort -u)"
+  [[ -n "$values" && "$(printf '%s\n' "$values" | grep -c .)" -eq 1 ]] \
+    || fail "${key} is missing or differs between configurations"
+  printf '%s' "$values"
+}
+
+bump_patch() {
+  local branch head remote marketing build major minor patch new_version new_build
+  branch="$(git rev-parse --abbrev-ref HEAD)"
+  [[ "$branch" == "main" ]] || fail "--bump-patch runs from main (current: ${branch})"
+  [[ -z "$(git status --porcelain)" ]] || fail "Working tree is not clean. Commit or stash changes before --bump-patch."
+  step "Checking origin/main"
+  git fetch origin main
+  head="$(git rev-parse HEAD)"
+  remote="$(git rev-parse origin/main)"
+  [[ "$head" == "$remote" ]] || fail "main is not in sync with origin/main"
+  marketing="$(unique_setting MARKETING_VERSION)"
+  build="$(unique_setting CURRENT_PROJECT_VERSION)"
+  [[ "$marketing" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] \
+    || fail "MARKETING_VERSION must be major.minor.patch (got ${marketing})"
+  major="${BASH_REMATCH[1]}"
+  minor="${BASH_REMATCH[2]}"
+  patch="${BASH_REMATCH[3]}"
+  [[ "$build" =~ ^[0-9]+$ ]] || fail "CURRENT_PROJECT_VERSION must be an integer (got ${build})"
+  new_version="${major}.${minor}.$((patch + 1))"
+  new_build="$((build + 1))"
+  step "Bumping to ${new_version} (build ${new_build})"
+  perl -i -pe "s/MARKETING_VERSION = \\Q${marketing}\\E;/MARKETING_VERSION = ${new_version};/g; s/CURRENT_PROJECT_VERSION = \\Q${build}\\E;/CURRENT_PROJECT_VERSION = ${new_build};/g" "$PBX"
+  [[ "$(unique_setting MARKETING_VERSION)" == "$new_version" ]] || fail "Version bump did not apply"
+  [[ "$(unique_setting CURRENT_PROJECT_VERSION)" == "$new_build" ]] || fail "Build bump did not apply"
+  git add "$PBX"
+  git commit -m "Bump OnlyWhisper to ${new_version}."
+  git push origin HEAD
+}
+
+default_notes() {
+  local previous subjects
+  previous="$(git log --format=%H --grep='^Bump OnlyWhisper to ' | sed -n '2p')"
+  if [[ -n "$previous" ]]; then
+    subjects="$(git log --format='%s' --invert-grep --grep='^Bump OnlyWhisper to ' "${previous}..HEAD")"
+  else
+    subjects="$(git log --format='%s' --invert-grep --grep='^Bump OnlyWhisper to ')"
   fi
-fi
+  if [[ -z "$subjects" ]]; then
+    printf 'OnlyWhisper %s\n' "$VERSION"
+    return
+  fi
+  printf 'OnlyWhisper %s\n\n' "$VERSION"
+  while IFS= read -r line; do
+    printf -- '- %s\n' "$line"
+  done <<<"$subjects"
+}
+
 command -v gh >/dev/null || fail "GitHub CLI (gh) is not installed"
 [[ -z "$NOTES_FILE" || -f "$NOTES_FILE" ]] || fail "Notes file not found: $NOTES_FILE"
+if [[ $BUMP_PATCH -eq 1 ]]; then
+  bump_patch
+fi
 
 step "Reading version"
 SETTINGS="$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release -derivedDataPath "$DERIVED_DATA" -showBuildSettings 2>/dev/null)"
@@ -198,7 +264,7 @@ NOTES="$BUILD_DIR/notes.md"
 if [[ -n "$NOTES_FILE" ]]; then
   cp "$NOTES_FILE" "$NOTES"
 else
-  printf 'OnlyWhisper %s\n' "$VERSION" >"$NOTES"
+  default_notes >"$NOTES"
 fi
 if [[ $SKIP_SIGN -eq 1 ]]; then
   printf '\nThis build is not notarized. macOS asks you to allow OnlyWhisper in System Settings > Privacy & Security.\n' >>"$NOTES"
