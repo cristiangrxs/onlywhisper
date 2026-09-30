@@ -1,4 +1,5 @@
 import CoreGraphics
+import SwiftUI
 import XCTest
 @testable import OnlyWhisper
 
@@ -59,6 +60,25 @@ final class NotchMetricsTests: XCTestCase {
         )
         XCTAssertEqual(withSafeArea?.band, 28)
         XCTAssertEqual(fallback?.band, 32)
+    }
+
+    func testBuiltInDisplayUsesTheNotchOnlyWhenOneWasMeasured() {
+        let metrics = NotchMetrics(width: 200, midX: 500, band: 32)
+        XCTAssertTrue(NotchMetrics.usesNotch(isBuiltIn: true, metrics: metrics))
+        XCTAssertFalse(NotchMetrics.usesNotch(isBuiltIn: true, metrics: nil))
+    }
+
+    func testExternalDisplayKeepsTheBottomCapsule() {
+        let metrics = NotchMetrics(width: 200, midX: 500, band: 32)
+        XCTAssertFalse(NotchMetrics.usesNotch(isBuiltIn: false, metrics: metrics))
+        XCTAssertFalse(NotchMetrics.usesNotch(isBuiltIn: false, metrics: nil))
+    }
+
+    func testClosedIslandSidesSitOnTheNotchWidth() {
+        let rect = CGRect(x: 0, y: 0, width: 200, height: 32)
+        let path = IslandShape(topRadius: 0, bottomRadius: IslandShape.closedBottomRadius).path(in: rect)
+        XCTAssertTrue(path.contains(CGPoint(x: 1, y: rect.midY)))
+        XCTAssertTrue(path.contains(CGPoint(x: rect.maxX - 1, y: rect.midY)))
     }
 
     func testMissingAuxiliaryAreasAreNotANotch() {

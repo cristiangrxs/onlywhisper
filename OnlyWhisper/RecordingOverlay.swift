@@ -41,17 +41,32 @@ struct NotchMetrics: Equatable {
         )
         return NotchMetrics(width: width, midX: midX, band: band)
     }
+
+    /// Only the built-in display can host the island. An external screen uses the bottom capsule.
+    static func usesNotch(isBuiltIn: Bool, metrics: NotchMetrics?) -> Bool {
+        isBuiltIn && metrics != nil
+    }
 }
 
 extension NSScreen {
+    /// Camera housing on this Mac's built-in display. External screens return nil.
     var notchMetrics: NotchMetrics? {
-        NotchMetrics.measure(
+        let metrics = NotchMetrics.measure(
             left: auxiliaryTopLeftArea,
             right: auxiliaryTopRightArea,
             screenFrame: frame,
             visibleFrame: visibleFrame,
             safeAreaTop: safeAreaInsets.top
         )
+        guard NotchMetrics.usesNotch(isBuiltIn: isBuiltIn, metrics: metrics) else { return nil }
+        return metrics
+    }
+
+    var isBuiltIn: Bool {
+        guard let number = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            return false
+        }
+        return CGDisplayIsBuiltin(CGDirectDisplayID(number.uint32Value)) != 0
     }
 }
 
@@ -229,14 +244,18 @@ struct RecordingOverlay: View {
     private func notchIsland(notchWidth: CGFloat, band: CGFloat) -> some View {
         let opened = reduceMotion || placement.expanded
         // Short states stay a little wider than the housing, the same shoulder as the listening row.
-        let shell = opened
-            ? CGSize(
-                width: min(560, max(contentSize.width + 80, notchWidth + 96)),
-                height: band + contentSize.height + 12
-            )
-            : CGSize(width: notchWidth, height: band)
+        let openShell = CGSize(
+            width: min(560, max(contentSize.width + 80, notchWidth + 96)),
+            height: band + contentSize.height + 12
+        )
+        let shell = opened ? openShell : CGSize(width: notchWidth, height: band)
+        let openRadii = IslandShape.radii(for: openShell)
+        let outline = IslandShape(
+            topRadius: opened ? openRadii.top : 0,
+            bottomRadius: opened ? openRadii.bottom : IslandShape.closedBottomRadius
+        )
 
-        return IslandShape()
+        return outline
             .fill(Color.black)
             .frame(width: shell.width, height: shell.height)
             .overlay(alignment: .top) {
@@ -245,7 +264,7 @@ struct RecordingOverlay: View {
                     .padding(.top, band)
                     .opacity(contentVisible ? 1 : 0)
             }
-            .clipShape(IslandShape())
+            .clipShape(outline)
             .shadow(
                 color: .black.opacity(placement.expanded ? 0.32 : 0),
                 radius: placement.expanded ? 16 : 0,
@@ -441,7 +460,7 @@ struct RecordingOverlay: View {
     }
 
     private var listeningBlock: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .center, spacing: 4) {
             listeningRow
                 .frame(height: 44)
             if !model.livePreview.isEmpty {
@@ -453,8 +472,7 @@ struct RecordingOverlay: View {
                 .padding(.bottom, 10)
             }
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 10)
+        .padding(.horizontal, 18)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityText)
     }
@@ -511,7 +529,6 @@ struct RecordingOverlay: View {
             Text(listeningTitle)
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
-            Spacer(minLength: 4)
             KeyCap("esc")
         }
     }
@@ -583,15 +600,32 @@ private struct LiveTranscript: View {
 }
 
 /// Black island joined to the top of the screen.
-/// Corner radii follow the current bounds, so a shrinking card never loses its bottom curve.
-private struct IslandShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        let tr = min(36, rect.width * 0.16, rect.height * 0.42)
-        let br = min(22, rect.width * 0.2, max(rect.height - tr, 1) * 0.72, rect.height * 0.34)
-        guard tr > 0.5 else {
-            return Path(roundedRect: rect, cornerRadius: min(br, rect.height / 2, rect.width / 2))
-        }
+/// Closed, the sides sit on the notch. Open, the same shoulders grow in with the frame.
+struct IslandShape: Shape {
+    /// Lower corners while the island is still the notch.
+    static let closedBottomRadius: CGFloat = 10
 
+    var topRadius: CGFloat
+    var bottomRadius: CGFloat
+
+    /// Shoulders for an open shell. Same curve as before, taken from the open size rather than the in-between frame.
+    static func radii(for size: CGSize) -> (top: CGFloat, bottom: CGFloat) {
+        let top = min(36, size.width * 0.16, size.height * 0.42)
+        let bottom = min(22, size.width * 0.2, max(size.height - top, 1) * 0.72, size.height * 0.34)
+        return (top, bottom)
+    }
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(topRadius, bottomRadius) }
+        set {
+            topRadius = newValue.first
+            bottomRadius = newValue.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let tr = max(topRadius, 0)
+        let br = min(max(bottomRadius, 0), max(rect.width / 2 - tr, 0), max(rect.height - tr, 0) / 2)
         let left = rect.minX
         let right = rect.maxX
         let top = rect.minY
@@ -602,13 +636,15 @@ private struct IslandShape: Shape {
 
         path.move(to: CGPoint(x: left, y: top))
         path.addLine(to: CGPoint(x: right, y: top))
-        path.addArc(
-            center: CGPoint(x: right, y: top + tr),
-            radius: tr,
-            startAngle: .degrees(-90),
-            endAngle: .degrees(180),
-            clockwise: true
-        )
+        if tr > 0.5 {
+            path.addArc(
+                center: CGPoint(x: right, y: top + tr),
+                radius: tr,
+                startAngle: .degrees(-90),
+                endAngle: .degrees(180),
+                clockwise: true
+            )
+        }
         path.addLine(to: CGPoint(x: bodyRight, y: bottom - br))
         if br > 0.5 {
             path.addArc(
@@ -631,13 +667,15 @@ private struct IslandShape: Shape {
             path.addLine(to: CGPoint(x: bodyLeft, y: bottom))
         }
         path.addLine(to: CGPoint(x: bodyLeft, y: top + tr))
-        path.addArc(
-            center: CGPoint(x: left, y: top + tr),
-            radius: tr,
-            startAngle: .degrees(0),
-            endAngle: .degrees(-90),
-            clockwise: true
-        )
+        if tr > 0.5 {
+            path.addArc(
+                center: CGPoint(x: left, y: top + tr),
+                radius: tr,
+                startAngle: .degrees(0),
+                endAngle: .degrees(-90),
+                clockwise: true
+            )
+        }
         path.closeSubpath()
         return path
     }
