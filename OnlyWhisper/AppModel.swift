@@ -24,6 +24,19 @@ enum CapturePhase: Equatable {
     case working(String)
 }
 
+/// What the capsule does with a finished dictation.
+enum DictationDelivery: Equatable {
+    case nothingHeard
+    case inserted
+    case holdForCopy
+
+    /// Blank text is never an insertion. A real string stays up for copying when the field did not take it.
+    static func decide(text: String, inserted: Bool) -> DictationDelivery {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .nothingHeard }
+        return inserted ? .inserted : .holdForCopy
+    }
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -55,6 +68,10 @@ final class AppModel {
     var livePreview = ""
     /// Briefly true after a dictation lands, so the capsule can confirm it before hiding.
     var dictationInserted = false
+    /// Polished dictation that never reached a text field. Stays until copy, Escape, or a click outside.
+    var pendingCopyText: String?
+    /// True while the copy button shows a checkmark, just before the capsule closes.
+    var pendingCopyConfirmed = false
     var rewriteText = ""
     var rewriteInstruction = ""
     var showRewrite = false
@@ -76,6 +93,7 @@ final class AppModel {
     private var meetingTimer: Task<Void, Never>?
     private var dictationTask: Task<Void, Never>?
     private var insertedTask: Task<Void, Never>?
+    private var pendingCopyTask: Task<Void, Never>?
     private var dictationEpoch = 0
     private var dictationCursor = 0
     private var dictationSession = DictationSession()
@@ -95,7 +113,14 @@ final class AppModel {
         }
         hotkeys.onPress = { [weak self] in self?.dictationPressed() }
         hotkeys.onRelease = { [weak self] duration in self?.dictationReleased(after: duration) }
-        hotkeys.onEscape = { [weak self] in self?.cancelCapture() }
+        hotkeys.onEscape = { [weak self] in
+            guard let self else { return }
+            if self.phase == .recording || self.phase == .handsFree {
+                self.cancelCapture()
+            } else {
+                self.dismissPendingCopy()
+            }
+        }
         KeyboardShortcuts.onKeyDown(for: .rewriteSelection) { [weak self] in
             Task { @MainActor in self?.beginRewrite() }
         }
@@ -142,6 +167,27 @@ final class AppModel {
     func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// Copies the polished text that could not be inserted, then lets the checkmark register before closing.
+    func copyPendingText() {
+        guard let text = pendingCopyText, !pendingCopyConfirmed else { return }
+        copy(text)
+        pendingCopyConfirmed = true
+        pendingCopyTask?.cancel()
+        pendingCopyTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard let self, !Task.isCancelled else { return }
+            self.dismissPendingCopy()
+        }
+    }
+
+    /// Drops the held text. A click outside, Escape, or a finished copy all come through here.
+    func dismissPendingCopy() {
+        let showing = pendingCopyText != nil
+        clearPendingCopy()
+        guard showing, phase == .idle, overlayHint == nil, !dictationInserted else { return }
+        OverlayPanel.shared.hide()
     }
 
     func bootstrap() {
@@ -396,6 +442,7 @@ final class AppModel {
 
     func showOverlayHint(_ text: String) {
         clearInsertedConfirmation()
+        clearPendingCopy()
         hintTask?.cancel()
         overlayHint = text
         OverlayPanel.shared.show()
@@ -403,7 +450,9 @@ final class AppModel {
             try? await Task.sleep(for: .milliseconds(1500))
             guard let self, self.phase == .idle else { return }
             self.overlayHint = nil
-            OverlayPanel.shared.hide()
+            if self.pendingCopyText == nil, !self.dictationInserted {
+                OverlayPanel.shared.hide()
+            }
         }
     }
 
@@ -505,6 +554,7 @@ final class AppModel {
         isSmoothing = false
         livePreview = ""
         clearInsertedConfirmation()
+        clearPendingCopy()
         hintTask?.cancel()
         overlayHint = nil
         TextInserter.beginInsertion()
@@ -538,6 +588,7 @@ final class AppModel {
         isSmoothing = false
         phase = .idle
         level = 0
+        clearPendingCopy()
         OverlayPanel.shared.hide()
         let keepSpeech = meetingActive
         Task {
@@ -568,12 +619,14 @@ final class AppModel {
             isSmoothing = false
         }
         await qwen.unload()
-        let landed = !finished.isEmpty
-        if landed {
-            TextInserter.replaceInsertion(with: finished, allowPasteFallback: true)
-            history.add(source: "dictation", raw: raw, polished: finished)
-        } else {
+        let text = finished.trimmingCharacters(in: .whitespacesAndNewlines)
+        let didInsert: Bool
+        if text.isEmpty {
             TextInserter.revertInsertion()
+            didInsert = false
+        } else {
+            didInsert = TextInserter.replaceInsertion(with: text, allowPasteFallback: true)
+            history.add(source: "dictation", raw: raw, polished: text)
         }
         if !meetingActive {
             await speech.unload()
@@ -581,10 +634,13 @@ final class AppModel {
         dictationSession.reset()
         livePreview = ""
         phase = .idle
-        if landed {
-            confirmInsertion()
-        } else {
+        switch DictationDelivery.decide(text: text, inserted: didInsert) {
+        case .nothingHeard:
             showOverlayHint(t("Nothing heard", "Nichts verstanden"))
+        case .inserted:
+            confirmInsertion()
+        case .holdForCopy:
+            holdForCopy(text)
         }
     }
 
@@ -687,13 +743,14 @@ final class AppModel {
     }
 
     private func confirmInsertion() {
+        clearPendingCopy()
         insertedTask?.cancel()
         dictationInserted = true
         insertedTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(800))
             guard let self, !Task.isCancelled else { return }
             self.dictationInserted = false
-            if self.phase == .idle, self.overlayHint == nil {
+            if self.phase == .idle, self.overlayHint == nil, self.pendingCopyText == nil {
                 OverlayPanel.shared.hide()
             }
         }
@@ -703,6 +760,27 @@ final class AppModel {
         insertedTask?.cancel()
         insertedTask = nil
         dictationInserted = false
+    }
+
+    private func holdForCopy(_ text: String) {
+        clearInsertedConfirmation()
+        hintTask?.cancel()
+        hintTask = nil
+        overlayHint = nil
+        pendingCopyTask?.cancel()
+        pendingCopyTask = nil
+        pendingCopyConfirmed = false
+        pendingCopyText = text
+        OverlayPanel.shared.show()
+        OverlayPanel.shared.beginCopyTracking()
+    }
+
+    private func clearPendingCopy() {
+        pendingCopyTask?.cancel()
+        pendingCopyTask = nil
+        pendingCopyConfirmed = false
+        pendingCopyText = nil
+        OverlayPanel.shared.endCopyTracking()
     }
 
     private func ruled(_ text: String) -> String {

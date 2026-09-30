@@ -85,11 +85,46 @@ final class OverlayPlacement {
     var maxHeight: CGFloat = 640
 }
 
+/// Borderless panel that stays click-through except while a failed dictation is waiting to be copied.
+/// Clicks on the capsule reach the copy button. Clicks anywhere else pass through to the app underneath.
+final class OverlayPanelWindow: NSPanel {
+    var tracksCapsule = false
+    var capsuleFrame: CGRect = .zero
+    var onClickOutside: (@MainActor () -> Void)?
+
+    override var canBecomeKey: Bool { tracksCapsule }
+    override var canBecomeMain: Bool { false }
+
+    override func sendEvent(_ event: NSEvent) {
+        let isClick = event.type == .leftMouseDown || event.type == .rightMouseDown
+        guard tracksCapsule, isClick, capsuleFrame.width > 1, capsuleFrame.height > 1 else {
+            super.sendEvent(event)
+            return
+        }
+        let screenPoint = convertToScreen(NSRect(origin: event.locationInWindow, size: .zero)).origin
+        guard capsuleFrame.contains(screenPoint) else {
+            ignoresMouseEvents = true
+            let copy = event.cgEvent?.copy()
+            let dismiss = onClickOutside
+            MainActor.assumeIsolated {
+                dismiss?()
+            }
+            DispatchQueue.main.async {
+                copy?.post(tap: .cghidEventTap)
+            }
+            return
+        }
+        super.sendEvent(event)
+    }
+}
+
 @MainActor
 final class OverlayPanel {
     static let shared = OverlayPanel()
 
-    private var panel: NSPanel?
+    private var panel: OverlayPanelWindow?
+    private var globalMouseMonitor: Any?
+    private var localMouseMonitor: Any?
     private let placement = OverlayPlacement()
     private var generation = 0
 
@@ -135,6 +170,7 @@ final class OverlayPanel {
     }
 
     func hide() {
+        endCopyTracking()
         generation += 1
         let token = generation
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -149,6 +185,88 @@ final class OverlayPanel {
         }
     }
 
+    /// While the polished text is waiting to be copied, only the capsule accepts clicks.
+    func beginCopyTracking() {
+        let panel = ensurePanel()
+        panel.capsuleFrame = .zero
+        panel.tracksCapsule = true
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.acceptsMouseMovedEvents = true
+        panel.ignoresMouseEvents = true
+        startMouseMonitors()
+    }
+
+    func endCopyTracking() {
+        panel?.tracksCapsule = false
+        panel?.becomesKeyOnlyIfNeeded = true
+        panel?.ignoresMouseEvents = true
+        panel?.capsuleFrame = .zero
+        if panel?.isKeyWindow == true {
+            panel?.resignKey()
+        }
+        stopMouseMonitors()
+    }
+
+    func updateCapsuleFrame(_ frame: CGRect) {
+        guard let panel, panel.tracksCapsule else { return }
+        let expanded = frame.insetBy(dx: -6, dy: -6)
+        guard expanded != panel.capsuleFrame else { return }
+        panel.capsuleFrame = expanded
+        updateMousePassthrough()
+    }
+
+    private func updateMousePassthrough() {
+        guard let panel, panel.tracksCapsule else { return }
+        let frame = panel.capsuleFrame
+        guard frame.width > 1, frame.height > 1 else {
+            panel.ignoresMouseEvents = true
+            return
+        }
+        panel.ignoresMouseEvents = !frame.contains(NSEvent.mouseLocation)
+    }
+
+    private func startMouseMonitors() {
+        guard globalMouseMonitor == nil else { return }
+        let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDown, .rightMouseDown]
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { event in
+            let isClick = event.type == .leftMouseDown || event.type == .rightMouseDown
+            let point = NSEvent.mouseLocation
+            Task { @MainActor in
+                OverlayPanel.shared.handleTrackedMouse(isClick: isClick, at: point)
+            }
+        }
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { event in
+            let isClick = event.type == .leftMouseDown || event.type == .rightMouseDown
+            let point = NSEvent.mouseLocation
+            Task { @MainActor in
+                OverlayPanel.shared.handleTrackedMouse(isClick: isClick, at: point)
+            }
+            return event
+        }
+    }
+
+    private func stopMouseMonitors() {
+        if let globalMouseMonitor {
+            NSEvent.removeMonitor(globalMouseMonitor)
+            self.globalMouseMonitor = nil
+        }
+        if let localMouseMonitor {
+            NSEvent.removeMonitor(localMouseMonitor)
+            self.localMouseMonitor = nil
+        }
+    }
+
+    private func handleTrackedMouse(isClick: Bool, at point: CGPoint) {
+        guard let panel, panel.tracksCapsule else { return }
+        let frame = panel.capsuleFrame
+        guard frame.width > 1, frame.height > 1 else { return }
+        let inside = frame.contains(point)
+        panel.ignoresMouseEvents = !inside
+        if isClick, !inside {
+            AppModel.shared.dismissPendingCopy()
+        }
+    }
+
     /// Tall enough for the transcript to grow, and no taller than about 70% of the screen.
     private static func panelSize(on screen: NSScreen) -> NSSize {
         NSSize(
@@ -157,7 +275,7 @@ final class OverlayPanel {
         )
     }
 
-    private func ensurePanel() -> NSPanel {
+    private func ensurePanel() -> OverlayPanelWindow {
         if let panel { return panel }
         let view = NSHostingView(
             rootView: RecordingOverlay()
@@ -166,7 +284,7 @@ final class OverlayPanel {
         )
         view.sizingOptions = .standardBounds
         view.autoresizingMask = [.width, .height]
-        let panel = NSPanel(
+        let panel = OverlayPanelWindow(
             contentRect: NSRect(origin: .zero, size: NSSize(width: 440, height: 160)),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -178,6 +296,8 @@ final class OverlayPanel {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.ignoresMouseEvents = true
+        panel.acceptsMouseMovedEvents = true
+        panel.onClickOutside = { AppModel.shared.dismissPendingCopy() }
         // The capsule draws its own shadow, a window shadow would not follow its changing width.
         panel.hasShadow = false
         panel.contentView = view
@@ -204,7 +324,9 @@ struct RecordingOverlay: View {
     @State private var listeningSize: CGSize = .zero
     @State private var polishingSize: CGSize = .zero
     @State private var insertedSize: CGSize = .zero
+    @State private var pendingCopySize: CGSize = .zero
     @State private var hintSize: CGSize = .zero
+    @State private var copyHovering = false
 
     var body: some View {
         Group {
@@ -230,6 +352,7 @@ struct RecordingOverlay: View {
         return capsuleBody
             .fixedSize(horizontal: true, vertical: true)
             .glassPanel(cornerRadius: 22)
+            .background { capsuleFrameReporter() }
             .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
             .scaleEffect(reduceMotion || shown ? 1 : 0.94, anchor: .bottom)
             .offset(y: reduceMotion || shown ? 0 : 8)
@@ -258,6 +381,7 @@ struct RecordingOverlay: View {
         return outline
             .fill(Color.black)
             .frame(width: shell.width, height: shell.height)
+            .background { capsuleFrameReporter() }
             .overlay(alignment: .top) {
                 capsuleBody
                     .fixedSize()
@@ -284,6 +408,8 @@ struct RecordingOverlay: View {
                 polishingBlock
             case .inserted:
                 insertedCapsule
+            case .pendingCopy(let text):
+                pendingCopyCapsule(text)
             case .hint(let hint):
                 hintCapsule(hint)
             }
@@ -303,12 +429,18 @@ struct RecordingOverlay: View {
                 insertedCapsule.fixedSize().onGeometryChange(for: CGSize.self) { proxy in
                     proxy.size
                 } action: { insertedSize = $0 }.hidden()
+                if let text = model.pendingCopyText {
+                    pendingCopyCapsule(text).fixedSize().onGeometryChange(for: CGSize.self) { proxy in
+                        proxy.size
+                    } action: { pendingCopySize = $0 }.hidden()
+                }
                 if let hint = model.overlayHint {
                     hintCapsule(hint).fixedSize().onGeometryChange(for: CGSize.self) { proxy in
                         proxy.size
                     } action: { hintSize = $0 }.hidden()
                 }
             }
+            .allowsHitTesting(false)
             .accessibilityHidden(true)
         }
         .onChange(of: desiredMode) { _, newMode in
@@ -324,6 +456,10 @@ struct RecordingOverlay: View {
         }
         .onChange(of: insertedSize) { _, newSize in
             guard desiredMode == .inserted else { return }
+            adopt(newSize)
+        }
+        .onChange(of: pendingCopySize) { _, newSize in
+            guard case .pendingCopy = desiredMode else { return }
             adopt(newSize)
         }
         .onChange(of: hintSize) { _, newSize in
@@ -354,6 +490,9 @@ struct RecordingOverlay: View {
         if let hint = model.overlayHint, model.phase == .idle {
             return .hint(hint)
         }
+        if let text = model.pendingCopyText, model.phase == .idle {
+            return .pendingCopy(text)
+        }
         if model.dictationInserted, model.phase == .idle {
             return .inserted
         }
@@ -373,6 +512,7 @@ struct RecordingOverlay: View {
         case .listening: listeningSize
         case .polishing: polishingSize
         case .inserted: insertedSize
+        case .pendingCopy: pendingCopySize
         case .hint: hintSize
         }
     }
@@ -442,6 +582,57 @@ struct RecordingOverlay: View {
         .frame(height: 44)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(t("Inserted", "Eingefügt"))
+    }
+
+    /// Polished text that never landed in a field. The copy button stays until the text is copied, Escape, or a click outside.
+    private func pendingCopyCapsule(_ text: String) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            LiveTranscript(
+                text: text,
+                maxWidth: 400,
+                maxLines: transcriptLineLimit,
+                prominent: true
+            )
+            copyButton
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(minHeight: 44)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(text)
+        .accessibilityHint(t("Press Escape or click outside to close.", "Esc oder ein Klick außerhalb schließt."))
+    }
+
+    private var copyButtonTitle: String {
+        model.pendingCopyConfirmed ? t("Copied", "Kopiert") : t("Copy", "Kopieren")
+    }
+
+    private var copyButton: some View {
+        Button {
+            model.copyPendingText()
+        } label: {
+            Image(systemName: model.pendingCopyConfirmed ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(model.pendingCopyConfirmed ? AnyShapeStyle(.green) : AnyShapeStyle(.primary))
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 28, height: 28)
+                .background(
+                    Circle().fill(copyHovering ? Color.primary.opacity(0.14) : Color.primary.opacity(0.08))
+                )
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .pointerStyle(.link)
+        .onHover { copyHovering = $0 }
+        .help(copyButtonTitle)
+        .accessibilityLabel(copyButtonTitle)
+    }
+
+    @ViewBuilder
+    private func capsuleFrameReporter() -> some View {
+        if model.pendingCopyText != nil {
+            CapsuleFrameReporter { OverlayPanel.shared.updateCapsuleFrame($0) }
+        }
     }
 
     private func hintCapsule(_ hint: String) -> some View {
@@ -550,6 +741,7 @@ private enum CapsuleMode: Equatable {
     case listening
     case polishing
     case inserted
+    case pendingCopy(String)
     case hint(String)
 }
 
@@ -568,6 +760,8 @@ private struct LiveTranscript: View {
     var text: String
     var maxWidth: CGFloat
     var maxLines: Int
+    /// Finished text starts at the beginning. Live words keep the newest line in view.
+    var prominent = false
     @State private var singleLineWidth: CGFloat = 0
 
     private var width: CGFloat {
@@ -578,11 +772,11 @@ private struct LiveTranscript: View {
     var body: some View {
         Text(text)
             .font(Self.font)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(prominent ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             .multilineTextAlignment(.leading)
             .lineSpacing(2)
             .lineLimit(maxLines)
-            .truncationMode(.head)
+            .truncationMode(prominent ? .tail : .head)
             .frame(width: width, alignment: .bottomLeading)
             .background(alignment: .leading) {
                 Text(text)
@@ -597,6 +791,47 @@ private struct LiveTranscript: View {
     }
 
     private static let font = Font.system(size: 13)
+}
+
+/// Reports the capsule's screen rectangle so clicks outside it can pass through the large overlay window.
+private struct CapsuleFrameReporter: NSViewRepresentable {
+    var onChange: (CGRect) -> Void
+
+    func makeNSView(context: Context) -> FrameReportingView {
+        let view = FrameReportingView()
+        view.onChange = onChange
+        return view
+    }
+
+    func updateNSView(_ view: FrameReportingView, context: Context) {
+        view.onChange = onChange
+        view.publish()
+    }
+}
+
+private final class FrameReportingView: NSView {
+    var onChange: ((CGRect) -> Void)?
+
+    override func layout() {
+        super.layout()
+        publish()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        publish()
+    }
+
+    func publish() {
+        guard let window, bounds.width > 1, bounds.height > 1 else { return }
+        let frame = window.convertToScreen(convert(bounds, to: nil))
+        let onChange = onChange
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                onChange?(frame)
+            }
+        }
+    }
 }
 
 /// Black island joined to the top of the screen.

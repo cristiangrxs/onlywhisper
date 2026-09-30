@@ -2,6 +2,25 @@ import AppKit
 import ApplicationServices
 import Foundation
 
+/// Whether the focused control can take dictated text. Web pages, windows, and buttons cannot,
+/// unless the selection itself is editable (a content-editable region reports that).
+enum TextTarget {
+    /// Accessibility role names. Search and secure fields are not exposed as Swift constants in this SDK.
+    static let writableRoles: Set<String> = [
+        "AXTextField",
+        "AXTextArea",
+        "AXComboBox",
+        "AXSearchField",
+        "AXSecureTextField",
+    ]
+
+    static func canAcceptInsertion(role: String?, selectedTextSettable: Bool) -> Bool {
+        if selectedTextSettable { return true }
+        guard let role else { return false }
+        return writableRoles.contains(role)
+    }
+}
+
 @MainActor
 enum TextInserter {
     private static var field: AXUIElement?
@@ -30,6 +49,7 @@ enum TextInserter {
             return true
         }
         guard allowPasteFallback, !text.isEmpty, !insertedWithPaste, insertedRange == nil else { return false }
+        guard let element = focusedElement(), canReceivePaste(element) else { return false }
         paste(text)
         insertedWithPaste = true
         return true
@@ -84,6 +104,29 @@ enum TextInserter {
     private static func landed(at location: Int, length: Int, in element: AXUIElement) -> Bool {
         guard let after = selectedRange(of: element) else { return false }
         return after.location + after.length == location + length
+    }
+
+    /// Paste is a guess: it only runs when the focused control is a text field or its selection can be set.
+    /// A bare window or web page would swallow Command-V and still look like a successful insert.
+    private static func canReceivePaste(_ element: AXUIElement) -> Bool {
+        TextTarget.canAcceptInsertion(
+            role: role(of: element),
+            selectedTextSettable: selectedTextIsSettable(element)
+        )
+    }
+
+    private static func role(of element: AXUIElement) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &value) == .success else { return nil }
+        return value as? String
+    }
+
+    private static func selectedTextIsSettable(_ element: AXUIElement) -> Bool {
+        var settable = DarwinBoolean(false)
+        guard AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable) == .success else {
+            return false
+        }
+        return settable.boolValue
     }
 
     private static func focusedElement() -> AXUIElement? {
