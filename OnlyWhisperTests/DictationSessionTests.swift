@@ -41,6 +41,32 @@ final class DictationSessionTests: XCTestCase {
         XCTAssertEqual(session.text, "Hallo")
     }
 
+    func testEmptyUpdateClearsTheOpenTextOnly() {
+        var session = DictationSession()
+        session.updateOpen("Hallo")
+        session.settleOpen()
+        session.updateOpen("noch etwas")
+        XCTAssertTrue(session.updateOpen(""))
+        XCTAssertEqual(session.open, "")
+        XCTAssertEqual(session.settled, "Hallo")
+        XCTAssertEqual(session.text, "Hallo")
+    }
+
+    func testSilenceIsNotSpeech() {
+        let samples = [Float](repeating: 0, count: 3_200)
+        XCTAssertFalse(SpeechPresence.containsSpeech(samples))
+    }
+
+    func testQuietNoiseIsNotSpeech() {
+        let samples = [Float](repeating: 0.002, count: 3_200)
+        XCTAssertFalse(SpeechPresence.containsSpeech(samples))
+    }
+
+    func testAClearLevelCountsAsSpeech() {
+        let samples = [Float](repeating: 0.2, count: 3_200)
+        XCTAssertTrue(SpeechPresence.containsSpeech(samples))
+    }
+
     func testEscapeClearsTheDraft() {
         var session = DictationSession()
         session.updateOpen("Hallo")

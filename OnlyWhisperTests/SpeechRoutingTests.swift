@@ -28,6 +28,49 @@ final class SpeechRoutingTests: XCTestCase {
         XCTAssertEqual(SpeechChoice.allCases.count, 58)
     }
 
+    func testConfidentSilenceIsDropped() {
+        XCTAssertNil(WhisperEngine.keepSegment(
+            text: "Thank you",
+            noSpeechProb: 0.9,
+            compressionRatio: 1.1,
+            avgLogprob: -0.2,
+            live: true
+        ))
+    }
+
+    func testRepeatedPhraseIsDropped() {
+        XCTAssertNil(WhisperEngine.keepSegment(
+            text: "thank you thank you",
+            noSpeechProb: 0.1,
+            compressionRatio: 3.0,
+            avgLogprob: -0.2,
+            live: true
+        ))
+    }
+
+    func testUncertainLiveWordIsKept() {
+        XCTAssertEqual(
+            WhisperEngine.keepSegment(
+                text: "hel",
+                noSpeechProb: 0.2,
+                compressionRatio: 1.1,
+                avgLogprob: -2.0,
+                live: true
+            ),
+            "hel"
+        )
+    }
+
+    func testUncertainFinalWordIsDropped() {
+        XCTAssertNil(WhisperEngine.keepSegment(
+            text: "hel",
+            noSpeechProb: 0.2,
+            compressionRatio: 1.1,
+            avgLogprob: -2.0,
+            live: false
+        ))
+    }
+
     func testWhisperModelPrefersTurboWhenListed() {
         XCTAssertEqual(
             WhisperModelChoice.name(

@@ -130,3 +130,36 @@ enum SpeechPause {
         return max(0.004, loud * 0.2)
     }
 }
+
+/// Decides whether a clip is loud enough to be speech. Silence and faint room tone never reach the model.
+enum SpeechPresence {
+    private static let frame = 1_600
+    /// Just above the pause floor of 0.004, so faint room tone stays out and a quiet voice still passes.
+    static let quietSpeechLevel: Float = 0.008
+
+    static func containsSpeech(_ samples: [Float]) -> Bool {
+        guard !samples.isEmpty else { return false }
+        if samples.count < frame {
+            return rms(samples, from: 0, count: samples.count) >= quietSpeechLevel
+        }
+        var loudest: Float = 0
+        var index = 0
+        while index + frame <= samples.count {
+            loudest = max(loudest, rms(samples, from: index, count: frame))
+            index += frame
+        }
+        let remainder = samples.count - index
+        if remainder > 0 {
+            loudest = max(loudest, rms(samples, from: index, count: remainder))
+        }
+        return loudest >= quietSpeechLevel
+    }
+
+    private static func rms(_ samples: [Float], from start: Int, count: Int) -> Float {
+        var sum: Float = 0
+        for sample in samples[start..<(start + count)] {
+            sum += sample * sample
+        }
+        return (sum / Float(count)).squareRoot()
+    }
+}

@@ -584,7 +584,7 @@ final class AppModel {
         if landed {
             confirmInsertion()
         } else {
-            OverlayPanel.shared.hide()
+            showOverlayHint(t("Nothing heard", "Nichts verstanden"))
         }
     }
 
@@ -596,10 +596,12 @@ final class AppModel {
                 continue
             }
             let count = samples.count
+            let open = Array(samples[dictationCursor..<count])
+            let heardSpeech = SpeechPresence.containsSpeech(open)
             await transcribeOpenAudio(samples, epoch: epoch, final: false)
             guard epoch == dictationEpoch, !Task.isCancelled else { return }
             let added = recorder.snapshot().count - count
-            if added < 3_200 {
+            if !heardSpeech || added < 3_200 {
                 try? await Task.sleep(for: .milliseconds(200))
             }
         }
@@ -619,8 +621,15 @@ final class AppModel {
         while epoch == dictationEpoch, end - start >= Self.minimumSpeechSamples {
             let cut = final ? end : SpeechPause.settlePoint(in: samples, from: start, to: end)
             let stop = cut ?? end
-            guard let heard = await transcribe(samples, from: start, to: stop, epoch: epoch, live: !final) else { return }
-            if !heard.isEmpty, dictationSession.updateOpen(heard) {
+            let slice = Array(samples[start..<stop])
+            let heard: String?
+            if SpeechPresence.containsSpeech(slice) {
+                heard = await transcribe(samples, from: start, to: stop, epoch: epoch, live: !final)
+            } else {
+                heard = ""
+            }
+            guard let heard else { return }
+            if dictationSession.updateOpen(heard) {
                 changed = true
             }
             guard cut != nil else { return }
@@ -644,7 +653,8 @@ final class AppModel {
             let text = try await speech.transcribe(
                 samples: Array(samples[start..<end]),
                 choice: settings.language,
-                live: live
+                live: live,
+                dictation: true
             )
             guard epoch == dictationEpoch else { return nil }
             return text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -657,9 +667,13 @@ final class AppModel {
 
     private func publishLive() {
         let text = dictationSession.text
-        guard !text.isEmpty else { return }
-        _ = TextInserter.replaceInsertion(with: text)
         livePreview = text
+        if text.isEmpty {
+            TextInserter.revertInsertion()
+            TextInserter.beginInsertion()
+            return
+        }
+        _ = TextInserter.replaceInsertion(with: text)
     }
 
     /// Long dictations go through in pieces so none is cut off. A piece that fails keeps its unpolished text.
@@ -728,7 +742,7 @@ final class AppModel {
             try await Task.sleep(for: .seconds(4))
             let samples = recorder.stop()
             phase = .idle
-            let spoken = try await speech.transcribe(samples: samples, choice: settings.language)
+            let spoken = try await speech.transcribe(samples: samples, choice: settings.language, dictation: true)
             await speech.unload()
             rewriteInstruction = spoken
         } catch {
