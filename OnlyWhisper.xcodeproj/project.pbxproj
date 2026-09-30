@@ -387,8 +387,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
 			requirement = {
-				kind = revision;
-				revision = b811a61569aa02691c99b808d08ee989b630c133;
+				kind = exactVersion;
+				version = 0.17.4;
 			};
 		};
 		PK000002 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */ = {

@@ -133,10 +133,15 @@ struct OnboardingView: View {
         case 3:
             t("Input Monitoring lets the Option key start dictation from any app.", "Eingabeüberwachung lässt die Option-Taste das Diktat aus jeder App starten.")
         default:
-            t(
-                "About 4–5 GB: Parakeet, Whisper Large v3 Turbo, and Qwen3 4B. After this, the app stays offline.",
-                "Etwa 4–5 GB: Parakeet, Whisper Large v3 Turbo und Qwen3 4B. Danach bleibt die App offline."
-            )
+            WhisperModelChoice.usesTurbo
+                ? t(
+                    "About 4–5 GB: Parakeet Ultra, Whisper Large v3 Turbo, and Qwen3 4B. After this, the app stays offline.",
+                    "Etwa 4–5 GB: Parakeet Ultra, Whisper Large v3 Turbo und Qwen3 4B. Danach bleibt die App offline."
+                )
+                : t(
+                    "About 4 GB: Parakeet Ultra, Whisper Large v3, and Qwen3 4B. After this, the app stays offline.",
+                    "Etwa 4 GB: Parakeet Ultra, Whisper Large v3 und Qwen3 4B. Danach bleibt die App offline."
+                )
         }
     }
 

@@ -44,94 +44,110 @@ enum SpeechChoice: String, Codable, CaseIterable, Identifiable, Sendable {
     case latvian
     case lithuanian
     case maltese
-    case irish
     case russian
     case ukrainian
+    case irish
     case japanese
     case chinese
     case korean
     case arabic
+    case turkish
+    case indonesian
+    case vietnamese
+    case hebrew
+    case hindi
+    case thai
+    case malay
+    case persian
+    case urdu
+    case bengali
+    case tamil
+    case cantonese
+    case tagalog
+    case catalan
+    case norwegian
+    case afrikaans
+    case welsh
+    case basque
+    case icelandic
+    case serbian
+    case macedonian
+    case albanian
+    case azerbaijani
+    case armenian
+    case georgian
+    case swahili
+    case galician
 
     var id: String { rawValue }
 
-    var code: String? {
-        switch self {
-        case .automatic: nil
-        case .german: "de"
-        case .english: "en"
-        case .french: "fr"
-        case .spanish: "es"
-        case .italian: "it"
-        case .portuguese: "pt"
-        case .dutch: "nl"
-        case .polish: "pl"
-        case .swedish: "sv"
-        case .danish: "da"
-        case .finnish: "fi"
-        case .greek: "el"
-        case .czech: "cs"
-        case .slovak: "sk"
-        case .slovenian: "sl"
-        case .croatian: "hr"
-        case .romanian: "ro"
-        case .hungarian: "hu"
-        case .bulgarian: "bg"
-        case .estonian: "et"
-        case .latvian: "lv"
-        case .lithuanian: "lt"
-        case .maltese: "mt"
-        case .irish: "ga"
-        case .russian: "ru"
-        case .ukrainian: "uk"
-        case .japanese: "ja"
-        case .chinese: "zh"
-        case .korean: "ko"
-        case .arabic: "ar"
-        }
-    }
+    var code: String? { spec.code }
 
-    var usesWhisper: Bool {
-        switch self {
-        case .irish, .japanese, .chinese, .korean, .arabic:
-            true
-        default:
-            false
-        }
-    }
+    /// Parakeet handles its 25 European languages. Everything else with a language code goes to Whisper.
+    var usesWhisper: Bool { spec.code != nil && !spec.parakeet }
 
-    var title: String {
+    var title: String { t(spec.english, spec.german) }
+
+    private var spec: (code: String?, english: String, german: String, parakeet: Bool) {
         switch self {
-        case .automatic: t("Automatic", "Automatisch")
-        case .german: t("German", "Deutsch")
-        case .english: t("English", "Englisch")
-        case .french: t("French", "Französisch")
-        case .spanish: t("Spanish", "Spanisch")
-        case .italian: t("Italian", "Italienisch")
-        case .portuguese: t("Portuguese", "Portugiesisch")
-        case .dutch: t("Dutch", "Niederländisch")
-        case .polish: t("Polish", "Polnisch")
-        case .swedish: t("Swedish", "Schwedisch")
-        case .danish: t("Danish", "Dänisch")
-        case .finnish: t("Finnish", "Finnisch")
-        case .greek: t("Greek", "Griechisch")
-        case .czech: t("Czech", "Tschechisch")
-        case .slovak: t("Slovak", "Slowakisch")
-        case .slovenian: t("Slovenian", "Slowenisch")
-        case .croatian: t("Croatian", "Kroatisch")
-        case .romanian: t("Romanian", "Rumänisch")
-        case .hungarian: t("Hungarian", "Ungarisch")
-        case .bulgarian: t("Bulgarian", "Bulgarisch")
-        case .estonian: t("Estonian", "Estnisch")
-        case .latvian: t("Latvian", "Lettisch")
-        case .lithuanian: t("Lithuanian", "Litauisch")
-        case .maltese: t("Maltese", "Maltesisch")
-        case .irish: t("Irish", "Irisch")
-        case .russian: t("Russian", "Russisch")
-        case .ukrainian: t("Ukrainian", "Ukrainisch")
-        case .japanese: t("Japanese", "Japanisch")
-        case .chinese: t("Chinese", "Chinesisch")
-        case .korean: t("Korean", "Koreanisch")
-        case .arabic: t("Arabic", "Arabisch")
+        case .automatic: (nil, "Automatic", "Automatisch", false)
+        case .german: ("de", "German", "Deutsch", true)
+        case .english: ("en", "English", "Englisch", true)
+        case .french: ("fr", "French", "Französisch", true)
+        case .spanish: ("es", "Spanish", "Spanisch", true)
+        case .italian: ("it", "Italian", "Italienisch", true)
+        case .portuguese: ("pt", "Portuguese", "Portugiesisch", true)
+        case .dutch: ("nl", "Dutch", "Niederländisch", true)
+        case .polish: ("pl", "Polish", "Polnisch", true)
+        case .swedish: ("sv", "Swedish", "Schwedisch", true)
+        case .danish: ("da", "Danish", "Dänisch", true)
+        case .finnish: ("fi", "Finnish", "Finnisch", true)
+        case .greek: ("el", "Greek", "Griechisch", true)
+        case .czech: ("cs", "Czech", "Tschechisch", true)
+        case .slovak: ("sk", "Slovak", "Slowakisch", true)
+        case .slovenian: ("sl", "Slovenian", "Slowenisch", true)
+        case .croatian: ("hr", "Croatian", "Kroatisch", true)
+        case .romanian: ("ro", "Romanian", "Rumänisch", true)
+        case .hungarian: ("hu", "Hungarian", "Ungarisch", true)
+        case .bulgarian: ("bg", "Bulgarian", "Bulgarisch", true)
+        case .estonian: ("et", "Estonian", "Estnisch", true)
+        case .latvian: ("lv", "Latvian", "Lettisch", true)
+        case .lithuanian: ("lt", "Lithuanian", "Litauisch", true)
+        case .maltese: ("mt", "Maltese", "Maltesisch", true)
+        case .russian: ("ru", "Russian", "Russisch", true)
+        case .ukrainian: ("uk", "Ukrainian", "Ukrainisch", true)
+        case .irish: ("ga", "Irish", "Irisch", false)
+        case .japanese: ("ja", "Japanese", "Japanisch", false)
+        case .chinese: ("zh", "Chinese", "Chinesisch", false)
+        case .korean: ("ko", "Korean", "Koreanisch", false)
+        case .arabic: ("ar", "Arabic", "Arabisch", false)
+        case .turkish: ("tr", "Turkish", "Türkisch", false)
+        case .indonesian: ("id", "Indonesian", "Indonesisch", false)
+        case .vietnamese: ("vi", "Vietnamese", "Vietnamesisch", false)
+        case .hebrew: ("he", "Hebrew", "Hebräisch", false)
+        case .hindi: ("hi", "Hindi", "Hindi", false)
+        case .thai: ("th", "Thai", "Thailändisch", false)
+        case .malay: ("ms", "Malay", "Malaiisch", false)
+        case .persian: ("fa", "Persian", "Persisch", false)
+        case .urdu: ("ur", "Urdu", "Urdu", false)
+        case .bengali: ("bn", "Bengali", "Bengalisch", false)
+        case .tamil: ("ta", "Tamil", "Tamil", false)
+        case .cantonese: ("yue", "Cantonese", "Kantonesisch", false)
+        case .tagalog: ("tl", "Tagalog", "Tagalog", false)
+        case .catalan: ("ca", "Catalan", "Katalanisch", false)
+        case .norwegian: ("no", "Norwegian", "Norwegisch", false)
+        case .afrikaans: ("af", "Afrikaans", "Afrikaans", false)
+        case .welsh: ("cy", "Welsh", "Walisisch", false)
+        case .basque: ("eu", "Basque", "Baskisch", false)
+        case .icelandic: ("is", "Icelandic", "Isländisch", false)
+        case .serbian: ("sr", "Serbian", "Serbisch", false)
+        case .macedonian: ("mk", "Macedonian", "Mazedonisch", false)
+        case .albanian: ("sq", "Albanian", "Albanisch", false)
+        case .azerbaijani: ("az", "Azerbaijani", "Aserbaidschanisch", false)
+        case .armenian: ("hy", "Armenian", "Armenisch", false)
+        case .georgian: ("ka", "Georgian", "Georgisch", false)
+        case .swahili: ("sw", "Swahili", "Swahili", false)
+        case .galician: ("gl", "Galician", "Galicisch", false)
         }
     }
 }

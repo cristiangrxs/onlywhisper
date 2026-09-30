@@ -185,30 +185,56 @@ private struct LanguageSettings: View {
 
     var body: some View {
         SettingsPage {
-            Picker(t("Speech", "Gesprochen"), selection: Binding(
-                get: { model.settings.language },
-                set: { model.settings.language = $0 }
-            )) {
-                ForEach(SpeechChoice.allCases) { choice in
-                    Text(choice.title).tag(choice)
-                }
-            }
-            Picker(t("Translate to", "Übersetzen nach"), selection: Binding(
-                get: { model.settings.translateTarget },
-                set: { model.settings.translateTarget = $0 }
-            )) {
-                ForEach(SpeechChoice.allCases.filter { $0 != .automatic }) { choice in
-                    Text(choice.title).tag(choice)
-                }
-            }
+            LanguageField(
+                title: t("Speech", "Gesprochen"),
+                selection: Binding(get: { model.settings.language }, set: { model.settings.language = $0 }),
+                choices: SpeechChoice.allCases
+            )
+            LanguageField(
+                title: t("Translate to", "Übersetzen nach"),
+                selection: Binding(get: { model.settings.translateTarget }, set: { model.settings.translateTarget = $0 }),
+                choices: SpeechChoice.allCases.filter { $0 != .automatic }
+            )
             LabeledContent("") {
                 Text(t(
-                    "Automatic detects the language each time. Choosing one is faster and more accurate.",
-                    "Automatisch erkennt die Sprache jedes Mal. Eine feste Wahl ist schneller und genauer."
+                    "Automatic detects one of the 25 European languages. Choose every other language here. A fixed choice is faster and more accurate.",
+                    "Automatisch erkennt eine der 25 europäischen Sprachen. Jede andere Sprache wählst du hier. Eine feste Wahl ist schneller und genauer."
                 ))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+private struct LanguageField: View {
+    var title: String
+    @Binding var selection: SpeechChoice
+    var choices: [SpeechChoice]
+    @State private var query = ""
+
+    private var filtered: [SpeechChoice] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return choices }
+        return choices.filter { choice in
+            choice.title.localizedStandardContains(needle)
+                || choice.code?.caseInsensitiveCompare(needle) == .orderedSame
+        }
+    }
+
+    var body: some View {
+        LabeledContent(title) {
+            VStack(alignment: .leading, spacing: 6) {
+                TextField(t("Search", "Suchen"), text: $query)
+                    .textFieldStyle(.roundedBorder)
+                List(filtered, selection: Binding<SpeechChoice?>(
+                    get: { selection },
+                    set: { if let choice = $0 { selection = choice } }
+                )) { choice in
+                    Text(choice.title).tag(choice)
+                }
+                .frame(height: 132)
             }
         }
     }
@@ -515,7 +541,7 @@ private struct AboutSettings: View {
                 Updater.shared.checkForUpdates()
             }
             .disabled(!Updater.shared.canCheckForUpdates)
-            Text("Parakeet CC BY 4.0 · Whisper MIT · Qwen Apache 2.0")
+            Text("Parakeet Ultra CC BY 4.0 · Whisper MIT · Qwen Apache 2.0")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .padding(.top, DS.spacingS)

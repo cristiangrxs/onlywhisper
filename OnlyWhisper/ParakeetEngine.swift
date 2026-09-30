@@ -24,7 +24,7 @@ actor ParakeetEngine {
         ModelHub.offlineMode = true
         let models = try await AsrModels.downloadAndLoad(
             to: ModelPaths.parakeet,
-            version: .v3,
+            version: .ultra,
             encoderPrecision: .int8
         )
         let created = AsrManager()

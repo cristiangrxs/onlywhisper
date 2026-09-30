@@ -13,17 +13,17 @@ struct ModelInfo: Identifiable, Sendable {
     static let catalog: [ModelInfo] = [
         ModelInfo(
             id: "parakeet",
-            name: "Parakeet v3",
+            name: "Parakeet Ultra",
             role: t("Fast speech recognition", "Schnelle Spracherkennung"),
-            size: "≈ 0.5 GB",
+            size: "≈ 0.6 GB",
             symbol: "waveform",
             progressRange: 0...0.25
         ),
         ModelInfo(
             id: "whisper",
-            name: "Whisper Large v3 Turbo",
+            name: WhisperModelChoice.displayName,
             role: t("More languages", "Weitere Sprachen"),
-            size: "≈ 1.6 GB",
+            size: WhisperModelChoice.displaySize,
             symbol: "globe",
             progressRange: 0.25...0.55
         ),
@@ -56,7 +56,8 @@ final class ModelDownloadManager {
 
     func refreshReadyState() {
         isReady = FileManager.default.fileExists(atPath: ModelPaths.readyMarker.path)
-            && AsrModels.modelsExist(at: ModelPaths.parakeet, version: .v3, encoderPrecision: .int8)
+            && AsrModels.modelsExist(at: ModelPaths.parakeet, version: .ultra, encoderPrecision: .int8)
+            && WhisperModelChoice.isInstalled(downloadBase: ModelPaths.whisper, modelName: ModelPaths.whisperModelName)
             && qwenWeightsPresent
     }
 
@@ -86,10 +87,10 @@ final class ModelDownloadManager {
             try FileManager.default.createDirectory(at: ModelPaths.qwen, withIntermediateDirectories: true)
 
             status = t("Downloading speech model", "Sprachmodell wird geladen")
-            if !AsrModels.modelsExist(at: ModelPaths.parakeet, version: .v3, encoderPrecision: .int8) {
+            if !AsrModels.modelsExist(at: ModelPaths.parakeet, version: .ultra, encoderPrecision: .int8) {
                 _ = try await AsrModels.download(
                     to: ModelPaths.parakeet,
-                    version: .v3,
+                    version: .ultra,
                     encoderPrecision: .int8
                 ) { [weak self] progress in
                     Task { @MainActor in
