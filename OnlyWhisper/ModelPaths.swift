@@ -13,8 +13,16 @@ enum ModelPaths {
     static var parakeet: URL { root.appending(path: "Parakeet", directoryHint: .isDirectory) }
     static var whisper: URL { root.appending(path: "Whisper", directoryHint: .isDirectory) }
     static var qwen: URL { root.appending(path: "Qwen3-4B-Instruct-2507-4bit", directoryHint: .isDirectory) }
+    /// Weights FluidAudio writes beside `parakeet`, after stripping that last path component.
+    static var parakeetWeights: URL { root.appending(path: "parakeet-ultra-coreml", directoryHint: .isDirectory) }
     static var diarization: URL { root.appending(path: "Diarization", directoryHint: .isDirectory) }
-    static var readyMarker: URL { root.appending(path: "ready.json") }
+    static var installations: URL { root.appending(path: "installations.json") }
+
+    static func whisperLegacyPresent(fileManager: FileManager = .default) -> Bool {
+        let base = whisper.appending(path: "models/argmaxinc/whisperkit-coreml", directoryHint: .isDirectory)
+        let names = (try? fileManager.contentsOfDirectory(atPath: base.path)) ?? []
+        return WhisperModelChoice.hasLegacyInstall(folderNames: names, currentModelName: whisperModelName)
+    }
 
     static let qwenRepository = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
     static var whisperModelName: String { WhisperModelChoice.current }
@@ -51,8 +59,20 @@ enum WhisperModelChoice {
         usesTurbo ? "≈ 1.6 GB" : "≈ 0.6 GB"
     }
 
+    static func folderName(for modelName: String) -> String {
+        modelName.hasPrefix("openai_whisper-") ? modelName : "openai_whisper-\(modelName)"
+    }
+
+    /// An older Whisper build is still on disk while the build this app expects is not that folder.
+    static func hasLegacyInstall(folderNames: [String], currentModelName: String) -> Bool {
+        let current = folderName(for: currentModelName)
+        return folderNames.contains { name in
+            name.hasPrefix("openai_whisper-") && name != current
+        }
+    }
+
     static func isInstalled(downloadBase: URL, modelName: String) -> Bool {
-        let folder = modelName.hasPrefix("openai_whisper-") ? modelName : "openai_whisper-\(modelName)"
+        let folder = folderName(for: modelName)
         let config = downloadBase
             .appending(path: "models/argmaxinc/whisperkit-coreml/\(folder)", directoryHint: .isDirectory)
             .appending(path: "config.json")

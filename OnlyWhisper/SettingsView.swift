@@ -42,7 +42,19 @@ struct SettingsView: View {
         }
         .glassWindow()
         .background(SettingsWindowFinder())
-        .onAppear { model.ensureHotkeys() }
+        .onAppear {
+            model.ensureHotkeys()
+            applySettingsTabRequest()
+        }
+        .onChange(of: model.settingsTabRequest) { _, _ in
+            applySettingsTabRequest()
+        }
+    }
+
+    private func applySettingsTabRequest() {
+        guard let raw = model.settingsTabRequest, let next = SettingsTab(rawValue: raw) else { return }
+        tab = next
+        model.settingsTabRequest = nil
     }
 }
 
@@ -451,25 +463,36 @@ private struct ShortcutSettings: View {
 
 private struct ModelSettings: View {
     @Environment(AppModel.self) private var model
+    @State private var prompt: ModelChangePrompt?
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.spacingM) {
-            HStack {
+            HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(t("Models on this Mac", "Modelle auf diesem Mac"))
                         .font(.headline)
                     Text(t("Everything runs offline once downloaded.", "Nach dem Laden läuft alles offline."))
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                    if !model.canChangeModels {
+                        Text(t("Finish what you're doing first.", "Bitte zuerst beenden."))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                Spacer()
-                Button(model.downloads.isReady ? t("Download Again", "Erneut laden") : t("Download", "Laden")) {
-                    Task { await model.downloads.downloadRequiredModels() }
-                }
-                .disabled(model.downloads.isRunning)
+                Spacer(minLength: DS.spacingS)
+                headerActions
             }
             ForEach(ModelInfo.catalog) { info in
-                ModelCard(info: info, state: model.downloads.state(of: info))
+                ModelCard(
+                    info: info,
+                    state: model.downloads.state(of: info),
+                    showsActions: true,
+                    actionsEnabled: model.canChangeModels,
+                    onDownload: { Task { await model.downloadModel(info.id) } },
+                    onUpdate: { prompt = .update(info.id) },
+                    onRemove: { prompt = .remove(info.id) }
+                )
             }
             if let error = model.downloads.lastError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -479,12 +502,147 @@ private struct ModelSettings: View {
         }
         .padding(24)
         .frame(width: 560)
+        .onAppear {
+            if !model.downloads.isRunning {
+                model.downloads.refreshReadyState()
+            }
+        }
+        .confirmationDialog(
+            promptTitle,
+            isPresented: Binding(get: { prompt != nil }, set: { if !$0 { prompt = nil } }),
+            titleVisibility: .visible
+        ) {
+            confirmButton
+            Button(t("Cancel", "Abbrechen"), role: .cancel) {}
+        } message: {
+            Text(promptMessage)
+        }
+    }
+
+    @ViewBuilder
+    private var headerActions: some View {
+        HStack(spacing: DS.spacingS) {
+            if !model.downloads.missingIDs.isEmpty {
+                Button(t("Download missing", "Fehlende laden")) {
+                    Task { await model.downloadMissingModels() }
+                }
+                .disabled(!model.canChangeModels)
+            }
+            if model.downloads.outdatedIDs.count >= 2 {
+                Button(t("Update all", "Alle aktualisieren")) {
+                    prompt = .updateAll
+                }
+                .disabled(!model.canChangeModels)
+            }
+        }
+        .controlSize(.small)
+    }
+
+    @ViewBuilder
+    private var confirmButton: some View {
+        switch prompt {
+        case .remove(let id):
+            Button(t("Remove", "Entfernen"), role: .destructive) {
+                Task { await model.removeModel(id) }
+            }
+        case .update(let id):
+            Button(t("Update", "Aktualisieren")) {
+                Task { await model.updateModel(id) }
+            }
+        case .updateAll:
+            Button(t("Update all", "Alle aktualisieren")) {
+                Task { await model.updateOutdatedModels() }
+            }
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private var promptTitle: String {
+        switch prompt {
+        case .remove(let id):
+            let name = ModelInfo.info(id)?.name ?? ""
+            return t("Remove \(name)?", "\(name) entfernen?")
+        case .update(let id):
+            let name = ModelInfo.info(id)?.name ?? ""
+            return t("Update \(name)?", "\(name) aktualisieren?")
+        case .updateAll:
+            return t("Update models?", "Modelle aktualisieren?")
+        case nil:
+            return ""
+        }
+    }
+
+    private var promptMessage: String {
+        switch prompt {
+        case .remove(let id):
+            guard let info = ModelInfo.info(id) else { return "" }
+            return removalMessage(info)
+        case .update(let id):
+            guard let info = ModelInfo.info(id) else { return "" }
+            return t(
+                "Replace \(info.name) with the version in this app? \(info.size) will be downloaded.",
+                "\(info.name) durch die Version in dieser App ersetzen? Dabei werden \(info.size) geladen."
+            )
+        case .updateAll:
+            let names = model.downloads.outdatedIDs.compactMap { ModelInfo.info($0)?.name }.formatted(.list(type: .and))
+            return t(
+                "\(names) will be replaced with the versions in this app.",
+                "\(names) werden durch die Versionen in dieser App ersetzt."
+            )
+        case nil:
+            return ""
+        }
+    }
+
+    private func removalMessage(_ info: ModelInfo) -> String {
+        let effect: String
+        switch info.id {
+        case .parakeet:
+            effect = t(
+                "Dictation in most languages needs this model.",
+                "Diktat in den meisten Sprachen braucht dieses Modell."
+            )
+        case .whisper:
+            effect = t(
+                "More languages and meetings that use Whisper need this model.",
+                "Weitere Sprachen und Meetings, die Whisper brauchen, benötigen dieses Modell."
+            )
+        case .qwen:
+            effect = t(
+                "Polishing and rewriting need this model.",
+                "Glätten und Umschreiben brauchen dieses Modell."
+            )
+        }
+        return t(
+            "\(info.name) will be removed (\(info.size)). \(effect) You can download it again later.",
+            "\(info.name) wird entfernt (\(info.size)). \(effect) Du kannst es später erneut laden."
+        )
+    }
+}
+
+private enum ModelChangePrompt: Identifiable {
+    case remove(ModelID)
+    case update(ModelID)
+    case updateAll
+
+    var id: String {
+        switch self {
+        case .remove(let model): "remove-\(model.rawValue)"
+        case .update(let model): "update-\(model.rawValue)"
+        case .updateAll: "update-all"
+        }
     }
 }
 
 struct ModelCard: View {
     var info: ModelInfo
     var state: ModelState
+    var showsActions = false
+    var actionsEnabled = true
+    var onDownload: () -> Void = {}
+    var onUpdate: () -> Void = {}
+    var onRemove: () -> Void = {}
 
     var body: some View {
         HStack(spacing: DS.spacingM) {
@@ -501,17 +659,65 @@ struct ModelCard: View {
                 }
             }
             Spacer(minLength: DS.spacingS)
-            badge
+            trailing
         }
         .card(padding: DS.spacingM)
-        .accessibilityElement(children: .combine)
+        .modifier(OnboardingCardAccessibility(combine: !showsActions))
     }
 
     private var tint: Color {
         switch info.id {
-        case "parakeet": .blue
-        case "whisper": .teal
-        default: .purple
+        case .parakeet: .blue
+        case .whisper: .teal
+        case .qwen: .purple
+        }
+    }
+
+    @ViewBuilder
+    private var trailing: some View {
+        switch state {
+        case .downloading, .waiting:
+            badge
+        case .missing:
+            if showsActions {
+                actionButton(t("Download", "Laden"), prominent: true, action: onDownload)
+            } else {
+                badge
+            }
+        case .ready:
+            HStack(spacing: DS.spacingS) {
+                badge
+                if showsActions {
+                    actionButton(t("Remove", "Entfernen"), prominent: false, action: onRemove)
+                }
+            }
+        case .updateAvailable:
+            if showsActions {
+                VStack(alignment: .trailing, spacing: DS.spacingXS) {
+                    badge
+                    HStack(spacing: DS.spacingS) {
+                        actionButton(t("Update", "Aktualisieren"), prominent: true, action: onUpdate)
+                        actionButton(t("Remove", "Entfernen"), prominent: false, action: onRemove)
+                    }
+                }
+            } else {
+                badge
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(_ title: String, prominent: Bool, action: @escaping () -> Void) -> some View {
+        if prominent {
+            Button(title, action: action)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!actionsEnabled)
+        } else {
+            Button(title, action: action)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(!actionsEnabled)
         }
     }
 
@@ -519,9 +725,24 @@ struct ModelCard: View {
     private var badge: some View {
         switch state {
         case .ready: StatusBadge(title: t("On this Mac", "Auf diesem Mac"), tint: .green)
+        case .updateAvailable: StatusBadge(title: t("Update available", "Update verfügbar"), tint: .blue)
         case .downloading(let progress): StatusBadge(title: progress.formatted(.percent.precision(.fractionLength(0))), tint: .blue)
         case .waiting: StatusBadge(title: t("Waiting", "Wartet"), tint: .secondary)
         case .missing: StatusBadge(title: t("Not downloaded", "Nicht geladen"), tint: .orange)
+        }
+    }
+}
+
+/// Onboarding cards are one status summary. Settings cards keep their buttons separate for VoiceOver.
+private struct OnboardingCardAccessibility: ViewModifier {
+    var combine: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if combine {
+            content.accessibilityElement(children: .combine)
+        } else {
+            content
         }
     }
 }

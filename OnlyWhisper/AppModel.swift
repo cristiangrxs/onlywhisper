@@ -59,6 +59,8 @@ final class AppModel {
     var rewriteInstruction = ""
     var showRewrite = false
     var isSmoothing = false
+    /// Set before opening Settings so the window lands on that tab. Cleared once applied.
+    var settingsTabRequest: String?
 
     private let recorder = AudioRecorder()
     private let systemAudio = SystemAudioCapture()
@@ -113,6 +115,15 @@ final class AppModel {
         presentSettings { settingsOpener?() }
     }
 
+    func showModelSettings() {
+        settingsTabRequest = "models"
+        showSettings()
+    }
+
+    var canChangeModels: Bool {
+        phase == .idle && !meetingActive && !downloads.isRunning
+    }
+
     /// Gives focus back to the app the user was in, so dictation, rewrite, and paste land there.
     func returnFocus(then work: @escaping @MainActor () -> Void) {
         Task { @MainActor in
@@ -144,10 +155,7 @@ final class AppModel {
             settings.setupCompleted = true
             needsSetup = false
         } else if settings.setupCompleted {
-            needsSetup = true
-            setupStep = 4
-            opener?("setup")
-            NSApp.activate()
+            needsSetup = false
         } else {
             needsSetup = true
             opener?("setup")
@@ -220,7 +228,64 @@ final class AppModel {
     }
 
     func enqueueFiles(_ urls: [URL]) {
+        guard requireUsableModel(speechModel) else { return }
         files.enqueue(urls, speech: speech, language: settings.language)
+    }
+
+    func downloadModel(_ id: ModelID) async {
+        guard canChangeModels else { return }
+        await downloads.download(id)
+    }
+
+    func downloadMissingModels() async {
+        guard canChangeModels else { return }
+        await downloads.downloadMissing()
+    }
+
+    func updateModel(_ id: ModelID) async {
+        guard canChangeModels else { return }
+        await unloadSpeechModels()
+        await downloads.update(id)
+    }
+
+    func updateOutdatedModels() async {
+        guard canChangeModels else { return }
+        await unloadSpeechModels()
+        await downloads.updateOutdated()
+    }
+
+    func removeModel(_ id: ModelID) async {
+        guard canChangeModels else { return }
+        await unloadSpeechModels()
+        downloads.remove(id)
+    }
+
+    private var speechModel: ModelID {
+        settings.language.usesWhisper ? .whisper : .parakeet
+    }
+
+    /// Opens setup until the first install is finished. After that, a removed model is recovered from Settings.
+    @discardableResult
+    private func requireUsableModel(_ id: ModelID) -> Bool {
+        guard downloads.isUsable(id) else {
+            if settings.setupCompleted {
+                let name = ModelInfo.info(id)?.name ?? ""
+                showOverlayHint(t("\(name) is not on this Mac.", "\(name) ist nicht auf diesem Mac."))
+                showModelSettings()
+            } else {
+                needsSetup = true
+                setupStep = 4
+                opener?("setup")
+                NSApp.activate()
+            }
+            return false
+        }
+        return true
+    }
+
+    private func unloadSpeechModels() async {
+        await speech.unload()
+        await qwen.unload()
     }
 
     func startHandsFree() {
@@ -427,13 +492,14 @@ final class AppModel {
     }
 
     private func beginRecording(handsFree: Bool) {
-        guard downloads.isReady, microphoneGranted else {
+        guard microphoneGranted else {
             needsSetup = true
-            setupStep = downloads.isReady ? 1 : setupStep
+            setupStep = 1
             opener?("setup")
             NSApp.activate()
             return
         }
+        guard requireUsableModel(speechModel) else { return }
         dictationEpoch += 1
         dictationTask?.cancel()
         dictationSession.reset()
@@ -450,7 +516,7 @@ final class AppModel {
             OverlayPanel.shared.show()
             let epoch = dictationEpoch
             dictationTask = Task { await runDictationLoop(epoch: epoch) }
-            if settings.polishEnabled {
+            if settings.polishEnabled, downloads.isUsable(.qwen) {
                 Task { await qwen.prewarm() }
             }
         } catch {
@@ -494,7 +560,7 @@ final class AppModel {
         dictationSession.settleOpen()
         let raw = dictationSession.text
         var finished = ruled(raw)
-        if settings.polishEnabled, !finished.isEmpty {
+        if settings.polishEnabled, downloads.isUsable(.qwen), !finished.isEmpty {
             isSmoothing = true
             finished = await polishDictation(finished)
             isSmoothing = false
@@ -633,6 +699,7 @@ final class AppModel {
     }
 
     func dictateRewriteInstruction() async {
+        guard requireUsableModel(speechModel) else { return }
         do {
             try recorder.start()
             phase = .recording
@@ -649,6 +716,7 @@ final class AppModel {
     }
 
     private func rewrite(instruction: String) async {
+        guard requireUsableModel(.qwen) else { return }
         phase = .working(t("Rewriting", "Formuliert"))
         defer { phase = .idle }
         do {
@@ -663,10 +731,7 @@ final class AppModel {
     }
 
     func startMeeting() async {
-        guard downloads.isReady else {
-            opener?("setup")
-            return
-        }
+        guard requireUsableModel(speechModel) else { return }
         meetingNotes = nil
         meetingChunks = []
         transcribedUntil = 0
@@ -704,7 +769,7 @@ final class AppModel {
                 let speaker = chunk.speaker.map { "\($0): " } ?? ""
                 return speaker + chunk.text
             }.joined(separator: "\n")
-            if settings.polishEnabled, !transcript.isEmpty {
+            if settings.polishEnabled, downloads.isUsable(.qwen), !transcript.isEmpty {
                 let reply = try await qwen.polish(raw: transcript, kind: .meeting)
                 await qwen.unload()
                 meetingNotes = Self.parseNotes(reply)
