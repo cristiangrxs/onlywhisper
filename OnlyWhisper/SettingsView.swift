@@ -209,8 +209,8 @@ private struct LanguageSettings: View {
             )
             LabeledContent("") {
                 Text(t(
-                    "Automatic detects one of the 25 European languages. Choose every other language here. A fixed choice is faster and more accurate.",
-                    "Automatisch erkennt eine der 25 europäischen Sprachen. Jede andere Sprache wählst du hier. Eine feste Wahl ist schneller und genauer."
+                    "Automatic detects the spoken language. A fixed choice is faster and more accurate.",
+                    "Automatisch erkennt die gesprochene Sprache. Eine feste Wahl ist schneller und genauer."
                 ))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -605,8 +605,8 @@ private struct ModelSettings: View {
             )
         case .whisper:
             effect = t(
-                "More languages and meetings that use Whisper need this model.",
-                "Weitere Sprachen und Meetings, die Whisper brauchen, benötigen dieses Modell."
+                "Dictation and meetings need this model.",
+                "Diktat und Meetings brauchen dieses Modell."
             )
         case .qwen:
             effect = t(
@@ -762,7 +762,7 @@ private struct AboutSettings: View {
                 Updater.shared.checkForUpdates()
             }
             .disabled(!Updater.shared.canCheckForUpdates)
-            Text("Parakeet Ultra CC BY 4.0 · Whisper MIT · Qwen Apache 2.0")
+            Text("Whisper MIT · Qwen Apache 2.0")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .padding(.top, DS.spacingS)

@@ -260,9 +260,7 @@ final class AppModel {
         downloads.remove(id)
     }
 
-    private var speechModel: ModelID {
-        settings.language.usesWhisper ? .whisper : .parakeet
-    }
+    private var speechModel: ModelID { .whisper }
 
     /// Opens setup until the first install is finished. After that, a removed model is recovered from Settings.
     @discardableResult
@@ -515,7 +513,11 @@ final class AppModel {
             phase = handsFree ? .handsFree : .recording
             OverlayPanel.shared.show()
             let epoch = dictationEpoch
-            dictationTask = Task { await runDictationLoop(epoch: epoch) }
+            dictationTask = Task {
+                await speech.resetUtterance()
+                await speech.prepare()
+                await runDictationLoop(epoch: epoch)
+            }
             if settings.polishEnabled, downloads.isUsable(.qwen) {
                 Task { await qwen.prewarm() }
             }
@@ -588,9 +590,18 @@ final class AppModel {
 
     private func runDictationLoop(epoch: Int) async {
         while epoch == dictationEpoch, !Task.isCancelled {
-            try? await Task.sleep(for: .milliseconds(400))
+            let samples = recorder.snapshot()
+            if samples.count - dictationCursor < Self.minimumSpeechSamples {
+                try? await Task.sleep(for: .milliseconds(200))
+                continue
+            }
+            let count = samples.count
+            await transcribeOpenAudio(samples, epoch: epoch, final: false)
             guard epoch == dictationEpoch, !Task.isCancelled else { return }
-            await transcribeOpenAudio(recorder.snapshot(), epoch: epoch, final: false)
+            let added = recorder.snapshot().count - count
+            if added < 3_200 {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
         }
     }
 
@@ -608,7 +619,7 @@ final class AppModel {
         while epoch == dictationEpoch, end - start >= Self.minimumSpeechSamples {
             let cut = final ? end : SpeechPause.settlePoint(in: samples, from: start, to: end)
             let stop = cut ?? end
-            guard let heard = await transcribe(samples, from: start, to: stop, epoch: epoch) else { return }
+            guard let heard = await transcribe(samples, from: start, to: stop, epoch: epoch, live: !final) else { return }
             if !heard.isEmpty, dictationSession.updateOpen(heard) {
                 changed = true
             }
@@ -622,9 +633,19 @@ final class AppModel {
     /// Parakeet rejects anything shorter than 0.3 s.
     private static let minimumSpeechSamples = 4_800
 
-    private func transcribe(_ samples: [Float], from start: Int, to end: Int, epoch: Int) async -> String? {
+    private func transcribe(
+        _ samples: [Float],
+        from start: Int,
+        to end: Int,
+        epoch: Int,
+        live: Bool
+    ) async -> String? {
         do {
-            let text = try await speech.transcribe(samples: Array(samples[start..<end]), choice: settings.language)
+            let text = try await speech.transcribe(
+                samples: Array(samples[start..<end]),
+                choice: settings.language,
+                live: live
+            )
             guard epoch == dictationEpoch else { return nil }
             return text.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
@@ -636,8 +657,9 @@ final class AppModel {
 
     private func publishLive() {
         let text = dictationSession.text
-        let written = TextInserter.replaceInsertion(with: text)
-        livePreview = written ? "" : text
+        guard !text.isEmpty else { return }
+        _ = TextInserter.replaceInsertion(with: text)
+        livePreview = text
     }
 
     /// Long dictations go through in pieces so none is cut off. A piece that fails keeps its unpolished text.

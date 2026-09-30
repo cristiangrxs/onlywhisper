@@ -63,6 +63,13 @@ enum WhisperModelChoice {
         modelName.hasPrefix("openai_whisper-") ? modelName : "openai_whisper-\(modelName)"
     }
 
+    static func installedFolder(downloadBase: URL, modelName: String) -> URL {
+        downloadBase.appending(
+            path: "models/argmaxinc/whisperkit-coreml/\(folderName(for: modelName))",
+            directoryHint: .isDirectory
+        )
+    }
+
     /// An older Whisper build is still on disk while the build this app expects is not that folder.
     static func hasLegacyInstall(folderNames: [String], currentModelName: String) -> Bool {
         let current = folderName(for: currentModelName)
@@ -72,9 +79,7 @@ enum WhisperModelChoice {
     }
 
     static func isInstalled(downloadBase: URL, modelName: String) -> Bool {
-        let folder = folderName(for: modelName)
-        let config = downloadBase
-            .appending(path: "models/argmaxinc/whisperkit-coreml/\(folder)", directoryHint: .isDirectory)
+        let config = installedFolder(downloadBase: downloadBase, modelName: modelName)
             .appending(path: "config.json")
         return FileManager.default.fileExists(atPath: config.path)
     }

@@ -83,8 +83,8 @@ enum SpeechChoice: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var code: String? { spec.code }
 
-    /// Parakeet handles its 25 European languages. Everything else with a language code goes to Whisper.
-    var usesWhisper: Bool { spec.code != nil && !spec.parakeet }
+    /// Whisper transcribes every language. A missing code asks it to detect the language.
+    var usesWhisper: Bool { true }
 
     var title: String { t(spec.english, spec.german) }
 

@@ -1,18 +1,21 @@
 import Foundation
 
 actor SpeechRouter {
-    private let parakeet = ParakeetEngine()
     private let whisper = WhisperEngine()
 
-    func transcribe(samples: [Float], choice: SpeechChoice) async throws -> String {
-        if choice.usesWhisper {
-            return try await whisper.transcribe(samples: samples, languageCode: choice.code)
-        }
-        return try await parakeet.transcribe(samples: samples, languageCode: choice.code)
+    func prepare() async {
+        await whisper.prepare()
+    }
+
+    func resetUtterance() async {
+        await whisper.resetUtterance()
+    }
+
+    func transcribe(samples: [Float], choice: SpeechChoice, live: Bool = false) async throws -> String {
+        try await whisper.transcribe(samples: samples, languageCode: choice.code, live: live)
     }
 
     func unload() async {
-        await parakeet.unload()
         await whisper.unload()
     }
 }

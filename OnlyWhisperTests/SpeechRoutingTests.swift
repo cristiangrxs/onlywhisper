@@ -2,16 +2,14 @@ import XCTest
 @testable import OnlyWhisper
 
 final class SpeechRoutingTests: XCTestCase {
-    func testParakeetLanguagesStayOffWhisper() {
-        let parakeet: [SpeechChoice] = [
-            .automatic, .german, .english, .french, .spanish, .italian, .portuguese, .dutch,
-            .polish, .swedish, .danish, .finnish, .greek, .czech, .slovak, .slovenian,
-            .croatian, .romanian, .hungarian, .bulgarian, .estonian, .latvian, .lithuanian,
-            .maltese, .russian, .ukrainian,
-        ]
-        XCTAssertEqual(parakeet.count, 26)
-        for choice in parakeet {
-            XCTAssertFalse(choice.usesWhisper, choice.rawValue)
+    func testAutomaticHasNoLanguageCode() {
+        XCTAssertNil(SpeechChoice.automatic.code)
+        XCTAssertTrue(SpeechChoice.automatic.usesWhisper)
+    }
+
+    func testEveryLanguageUsesWhisper() {
+        for choice in SpeechChoice.allCases {
+            XCTAssertTrue(choice.usesWhisper, choice.rawValue)
         }
     }
 

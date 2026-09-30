@@ -12,20 +12,12 @@ struct ModelInfo: Identifiable, Sendable {
 
     static let catalog: [ModelInfo] = [
         ModelInfo(
-            id: .parakeet,
-            name: "Parakeet Ultra",
-            role: t("Fast speech recognition", "Schnelle Spracherkennung"),
-            size: "≈ 0.6 GB",
-            symbol: "waveform",
-            progressWeight: 0.25
-        ),
-        ModelInfo(
             id: .whisper,
             name: WhisperModelChoice.displayName,
-            role: t("More languages", "Weitere Sprachen"),
+            role: t("Speech recognition", "Spracherkennung"),
             size: WhisperModelChoice.displaySize,
-            symbol: "globe",
-            progressWeight: 0.30
+            symbol: "waveform",
+            progressWeight: 0.40
         ),
         ModelInfo(
             id: .qwen,
@@ -33,9 +25,12 @@ struct ModelInfo: Identifiable, Sendable {
             role: t("Polish and rewrite", "Glätten und Umschreiben"),
             size: "≈ 2.5 GB",
             symbol: "text.badge.star",
-            progressWeight: 0.45
+            progressWeight: 0.60
         ),
     ]
+
+    /// Models this build downloads and treats as required. Parakeet is not part of speech recognition.
+    static let requiredIDs: [ModelID] = [.whisper, .qwen]
 
     static func info(_ id: ModelID) -> ModelInfo? {
         catalog.first { $0.id == id }
@@ -119,7 +114,7 @@ final class ModelDownloadManager {
 
     /// Downloads every model that is missing or older than the build shipped with this app.
     func downloadRequiredModels() async {
-        let needed = ModelID.allCases.filter { installStatus($0) != .current }
+        let needed = ModelInfo.requiredIDs.filter { installStatus($0) != .current }
         await run(needed, replacingOutdated: true)
     }
 
@@ -152,7 +147,7 @@ final class ModelDownloadManager {
         }
         ModelHub.offlineMode = false
         do {
-            for id in ModelID.allCases where ids.contains(id) {
+            for id in ModelInfo.requiredIDs where ids.contains(id) {
                 queued.remove(id)
                 activeModel = id
                 activePortion = 0
@@ -292,8 +287,8 @@ final class ModelDownloadManager {
     }
 
     private func syncCatalog() {
-        missingIDs = ModelID.allCases.filter { installStatus($0) == .missing }
-        outdatedIDs = ModelID.allCases.filter { installStatus($0) == .outdated }
+        missingIDs = ModelInfo.requiredIDs.filter { installStatus($0) == .missing }
+        outdatedIDs = ModelInfo.requiredIDs.filter { installStatus($0) == .outdated }
         isReady = missingIDs.isEmpty && outdatedIDs.isEmpty
     }
 }

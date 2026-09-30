@@ -135,12 +135,12 @@ struct OnboardingView: View {
         default:
             WhisperModelChoice.usesTurbo
                 ? t(
-                    "About 4–5 GB: Parakeet Ultra, Whisper Large v3 Turbo, and Qwen3 4B. After this, the app stays offline.",
-                    "Etwa 4–5 GB: Parakeet Ultra, Whisper Large v3 Turbo und Qwen3 4B. Danach bleibt die App offline."
+                    "About 4 GB: Whisper Large v3 Turbo and Qwen3 4B. After this, the app stays offline.",
+                    "Etwa 4 GB: Whisper Large v3 Turbo und Qwen3 4B. Danach bleibt die App offline."
                 )
                 : t(
-                    "About 4 GB: Parakeet Ultra, Whisper Large v3, and Qwen3 4B. After this, the app stays offline.",
-                    "Etwa 4 GB: Parakeet Ultra, Whisper Large v3 und Qwen3 4B. Danach bleibt die App offline."
+                    "About 3 GB: Whisper Large v3 and Qwen3 4B. After this, the app stays offline.",
+                    "Etwa 3 GB: Whisper Large v3 und Qwen3 4B. Danach bleibt die App offline."
                 )
         }
     }
