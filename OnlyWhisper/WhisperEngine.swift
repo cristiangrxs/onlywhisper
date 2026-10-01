@@ -6,19 +6,6 @@ actor WhisperEngine {
     /// Language detected for the current utterance, so later live passes skip detection.
     private var lockedLanguage: String?
 
-    static func downloadIfNeeded() async throws {
-        let config = WhisperKitConfig(
-            model: ModelPaths.whisperModelName,
-            downloadBase: ModelPaths.whisper,
-            verbose: false,
-            logLevel: .error,
-            prewarm: false,
-            load: false,
-            download: true
-        )
-        _ = try await WhisperKit(config)
-    }
-
     func prepare() async {
         _ = try? await load()
     }

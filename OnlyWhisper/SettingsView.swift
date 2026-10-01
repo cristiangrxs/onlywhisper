@@ -484,20 +484,21 @@ private struct ModelSettings: View {
                 headerActions
             }
             ForEach(ModelInfo.catalog) { info in
+                let state = model.downloads.state(of: info)
                 ModelCard(
                     info: info,
-                    state: model.downloads.state(of: info),
+                    state: state,
                     showsActions: true,
                     actionsEnabled: model.canChangeModels,
+                    errorMessage: model.downloads.errorMessage(for: info.id),
+                    progressDetail: model.downloads.progressDetail(for: info.id),
+                    sizeText: model.downloads.sizeText(for: info.id),
+                    canCancel: isDownloading(state),
                     onDownload: { Task { await model.downloadModel(info.id) } },
                     onUpdate: { prompt = .update(info.id) },
-                    onRemove: { prompt = .remove(info.id) }
+                    onRemove: { prompt = .remove(info.id) },
+                    onCancel: { model.downloads.cancel() }
                 )
-            }
-            if let error = model.downloads.lastError {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout)
-                    .foregroundStyle(.red)
             }
         }
         .padding(24)
@@ -506,6 +507,7 @@ private struct ModelSettings: View {
             if !model.downloads.isRunning {
                 model.downloads.refreshReadyState()
             }
+            Task { await model.downloads.loadExactSizes() }
         }
         .confirmationDialog(
             promptTitle,
@@ -581,8 +583,8 @@ private struct ModelSettings: View {
         case .update(let id):
             guard let info = ModelInfo.info(id) else { return "" }
             return t(
-                "Replace \(info.name) with the version in this app? \(info.size) will be downloaded.",
-                "\(info.name) durch die Version in dieser App ersetzen? Dabei werden \(info.size) geladen."
+                "Replace \(info.name) with the version in this app? \(sized(info)) will be downloaded.",
+                "\(info.name) durch die Version in dieser App ersetzen? Dabei werden \(sized(info)) geladen."
             )
         case .updateAll:
             let names = model.downloads.outdatedIDs.compactMap { ModelInfo.info($0)?.name }.formatted(.list(type: .and))
@@ -593,6 +595,15 @@ private struct ModelSettings: View {
         case nil:
             return ""
         }
+    }
+
+    private func isDownloading(_ state: ModelState) -> Bool {
+        if case .downloading = state { return true }
+        return false
+    }
+
+    private func sized(_ info: ModelInfo) -> String {
+        model.downloads.sizeText(for: info.id) ?? t("the downloaded files", "die geladenen Dateien")
     }
 
     private func removalMessage(_ info: ModelInfo) -> String {
@@ -615,8 +626,8 @@ private struct ModelSettings: View {
             )
         }
         return t(
-            "\(info.name) will be removed (\(info.size)). \(effect) You can download it again later.",
-            "\(info.name) wird entfernt (\(info.size)). \(effect) Du kannst es später erneut laden."
+            "\(info.name) will be removed (\(sized(info))). \(effect) You can download it again later.",
+            "\(info.name) wird entfernt (\(sized(info))). \(effect) Du kannst es später erneut laden."
         )
     }
 }
@@ -640,29 +651,55 @@ struct ModelCard: View {
     var state: ModelState
     var showsActions = false
     var actionsEnabled = true
+    var errorMessage: String?
+    var progressDetail: String?
+    var sizeText: String?
+    var canCancel = false
     var onDownload: () -> Void = {}
     var onUpdate: () -> Void = {}
     var onRemove: () -> Void = {}
+    var onCancel: () -> Void = {}
 
     var body: some View {
-        HStack(spacing: DS.spacingM) {
-            IconTile(symbol: info.symbol, tint: tint, size: 32)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(info.name).font(.system(size: 13, weight: .semibold))
-                Text("\(info.role) · \(info.size)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if case .downloading(let progress) = state {
-                    ProgressView(value: progress)
-                        .progressViewStyle(.linear)
-                        .padding(.top, 4)
+        VStack(alignment: .leading, spacing: DS.spacingS) {
+            HStack(spacing: DS.spacingM) {
+                IconTile(symbol: info.symbol, tint: tint, size: 32)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(info.name).font(.system(size: 13, weight: .semibold))
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if case .downloading(let progress) = state {
+                        ProgressView(value: progress)
+                            .progressViewStyle(.linear)
+                            .padding(.top, 4)
+                        if let progressDetail {
+                            Text(progressDetail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
                 }
+                Spacer(minLength: DS.spacingS)
+                trailing
             }
-            Spacer(minLength: DS.spacingS)
-            trailing
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .card(padding: DS.spacingM)
-        .modifier(OnboardingCardAccessibility(combine: !showsActions))
+        .modifier(OnboardingCardAccessibility(combine: !showsActions && !canCancel))
+    }
+
+    private var subtitle: String {
+        if let sizeText, !sizeText.isEmpty {
+            return "\(info.role) · \(sizeText)"
+        }
+        return info.role
     }
 
     private var tint: Color {
@@ -676,11 +713,22 @@ struct ModelCard: View {
     @ViewBuilder
     private var trailing: some View {
         switch state {
+        case .downloading(_) where canCancel:
+            HStack(spacing: DS.spacingS) {
+                badge
+                Button(t("Cancel", "Abbrechen"), action: onCancel)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
         case .downloading, .waiting:
             badge
         case .missing:
             if showsActions {
-                actionButton(t("Download", "Laden"), prominent: true, action: onDownload)
+                actionButton(
+                    errorMessage == nil ? t("Download", "Laden") : t("Try Again", "Erneut versuchen"),
+                    prominent: true,
+                    action: onDownload
+                )
             } else {
                 badge
             }

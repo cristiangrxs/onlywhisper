@@ -15,7 +15,7 @@ struct ModelInfo: Identifiable, Sendable {
             id: .whisper,
             name: WhisperModelChoice.displayName,
             role: t("Speech recognition", "Spracherkennung"),
-            size: WhisperModelChoice.displaySize,
+            size: "",
             symbol: "waveform",
             progressWeight: 0.40
         ),
@@ -23,7 +23,7 @@ struct ModelInfo: Identifiable, Sendable {
             id: .qwen,
             name: "Qwen3 4B",
             role: t("Polish and rewrite", "Glätten und Umschreiben"),
-            size: "≈ 2.5 GB",
+            size: "",
             symbol: "text.badge.star",
             progressWeight: 0.60
         ),
@@ -52,14 +52,22 @@ final class ModelDownloadManager {
     var status: String = ""
     var isRunning = false
     var lastError: String?
+    /// Byte progress for the model that is downloading, such as "840 MB of 2.5 GB".
+    private(set) var progressDetail: String?
     private(set) var isReady = false
     private(set) var missingIDs: [ModelID] = []
     private(set) var outdatedIDs: [ModelID] = []
+    private(set) var exactByteCounts: [ModelID: Int64] = [:]
+    private(set) var failedModelID: ModelID?
 
     private var installations = ModelInstallationStore()
     private var activeModel: ModelID?
+    /// Set only while that model's files are being fetched, so cancel can drop an unfinished download.
+    private var downloadingID: ModelID?
     private var queued: Set<ModelID> = []
     private var activePortion: Double = 0
+    private let downloadRun = DownloadRun()
+    private var trackedDownload: Task<Void, Never>?
 
     func refreshReadyState() {
         installations = ModelInstallationStore.load(from: ModelPaths.installations)
@@ -94,28 +102,84 @@ final class ModelDownloadManager {
         filesPresent(id)
     }
 
+    func sizeText(for id: ModelID) -> String? {
+        exactByteCounts[id].map { ModelByteFormat.string(from: $0) }
+    }
+
+    /// Loads the exact download size for each model from the file listing.
+    func loadExactSizes() async {
+        if let whisper = await Self.listedBytes(
+            repository: ModelPaths.whisperRepository,
+            directory: WhisperModelChoice.folderName(for: ModelPaths.whisperModelName)
+        ) {
+            exactByteCounts[.whisper] = whisper
+        }
+        if let qwen = await Self.listedBytes(repository: ModelPaths.qwenRepository, directory: nil) {
+            exactByteCounts[.qwen] = qwen
+        }
+    }
+
+    private static func listedBytes(repository: String, directory: String?) async -> Int64? {
+        guard let files = try? await HuggingFaceDownloader.list(repository: repository, directory: directory) else {
+            return nil
+        }
+        let total = files.reduce(Int64(0)) { $0 + Int64($1.size ?? 0) }
+        return total > 0 ? total : nil
+    }
+
+    func errorMessage(for id: ModelID) -> String? {
+        guard failedModelID == id else { return nil }
+        return lastError
+    }
+
+    func progressDetail(for id: ModelID) -> String? {
+        guard isRunning, activeModel == id else { return nil }
+        return progressDetail
+    }
+
+    /// Stops the current transfer and discards what it has written, so the next download starts over.
+    func cancel() {
+        downloadRun.cancel()
+        trackedDownload?.cancel()
+    }
+
     func download(_ id: ModelID) async {
         guard installStatus(id) == .missing else { return }
-        await run([id], replacingOutdated: false)
+        await track { await self.run([id], replacingOutdated: false) }
     }
 
     func downloadMissing() async {
-        await run(missingIDs, replacingOutdated: false)
+        await track { await self.run(self.missingIDs, replacingOutdated: false) }
     }
 
     func update(_ id: ModelID) async {
         guard installStatus(id) == .outdated else { return }
-        await run([id], replacingOutdated: true)
+        await track { await self.run([id], replacingOutdated: true) }
     }
 
     func updateOutdated() async {
-        await run(outdatedIDs, replacingOutdated: true)
+        await track { await self.run(self.outdatedIDs, replacingOutdated: true) }
     }
 
     /// Downloads every model that is missing or older than the build shipped with this app.
     func downloadRequiredModels() async {
         let needed = ModelInfo.requiredIDs.filter { installStatus($0) != .current }
-        await run(needed, replacingOutdated: true)
+        await track { await self.run(needed, replacingOutdated: true) }
+    }
+
+    private func track(_ operation: @escaping @MainActor () async -> Void) async {
+        let task = Task { @MainActor in
+            await operation()
+        }
+        trackedDownload = task
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        if trackedDownload == task {
+            trackedDownload = nil
+        }
     }
 
     func remove(_ id: ModelID) {
@@ -124,8 +188,10 @@ final class ModelDownloadManager {
             installations.clear(id: id)
             try installations.save(to: ModelPaths.installations)
             lastError = nil
+            failedModelID = nil
         } catch {
             lastError = error.localizedDescription
+            failedModelID = id
         }
         syncCatalog()
     }
@@ -134,29 +200,38 @@ final class ModelDownloadManager {
         guard !isRunning, !ids.isEmpty else { return }
         isRunning = true
         lastError = nil
+        failedModelID = nil
+        progressDetail = nil
         fraction = 0
         activePortion = 0
         queued = Set(ids)
         activeModel = nil
+        downloadRun.reset()
         defer {
             isRunning = false
             activeModel = nil
+            downloadingID = nil
             queued = []
             activePortion = 0
+            progressDetail = nil
             refreshReadyState()
         }
         ModelHub.offlineMode = false
         do {
             for id in ModelInfo.requiredIDs where ids.contains(id) {
+                if downloadRun.isCancelled { throw CancellationError() }
                 queued.remove(id)
                 activeModel = id
                 activePortion = 0
+                progressDetail = nil
                 if replacingOutdated, installStatus(id) == .outdated {
                     try deleteFiles(id)
                     installations.clear(id: id)
                     try installations.save(to: ModelPaths.installations)
                 }
+                downloadingID = id
                 try await fetch(id, among: ids)
+                downloadingID = nil
                 installations.set(id: id, revision: ModelRevision.expected(id))
                 try installations.save(to: ModelPaths.installations)
                 syncCatalog()
@@ -165,10 +240,37 @@ final class ModelDownloadManager {
             fraction = 1
             status = t("Ready", "Bereit")
         } catch {
-            lastError = error.localizedDescription
-            status = t("Download stopped", "Download angehalten")
-            ModelHub.offlineMode = false
+            let interrupted = downloadingID
+            downloadingID = nil
+            if DownloadStop.isCancellation(error) || downloadRun.isCancelled {
+                if let interrupted {
+                    await discardPartialDownload(interrupted)
+                }
+                lastError = nil
+                failedModelID = nil
+                status = ""
+                ModelHub.offlineMode = false
+            } else {
+                failedModelID = activeModel
+                lastError = Self.failureMessage(for: activeModel)
+                status = ""
+                ModelHub.offlineMode = false
+            }
         }
+    }
+
+    static func failureMessage(for id: ModelID?) -> String {
+        let name = id.flatMap { ModelInfo.info($0)?.name } ?? t("The model", "Das Modell")
+        return t(
+            "\(name) could not be downloaded. Check your connection and try again.",
+            "\(name) konnte nicht geladen werden. Prüfe die Verbindung und versuche es erneut."
+        )
+    }
+
+    static func byteProgress(transferred: Int64, total: Int64) -> String {
+        let done = ModelByteFormat.string(from: transferred)
+        let all = ModelByteFormat.string(from: total)
+        return t("\(done) of \(all)", "\(done) von \(all)")
     }
 
     private func fetch(_ id: ModelID, among ids: [ModelID]) async throws {
@@ -193,9 +295,7 @@ final class ModelDownloadManager {
         case .whisper:
             status = t("Downloading Whisper", "Whisper wird geladen")
             try FileManager.default.createDirectory(at: ModelPaths.whisper, withIntermediateDirectories: true)
-            report(id: id, ids: ids, portion: 0)
-            try await WhisperEngine.downloadIfNeeded()
-            report(id: id, ids: ids, portion: 1)
+            try await downloadWhisper(among: ids)
         case .qwen:
             status = t("Downloading writing model", "Schreibmodell wird geladen")
             try FileManager.default.createDirectory(at: ModelPaths.qwen, withIntermediateDirectories: true)
@@ -203,34 +303,76 @@ final class ModelDownloadManager {
         }
     }
 
+    private func downloadWhisper(among ids: [ModelID]) async throws {
+        let folder = WhisperModelChoice.folderName(for: ModelPaths.whisperModelName)
+        let files = try await HuggingFaceDownloader.list(
+            repository: ModelPaths.whisperRepository,
+            directory: folder
+        )
+        let total = max(files.reduce(Int64(0)) { $0 + Int64($1.size ?? 0) }, 1)
+        exactByteCounts[.whisper] = total
+        let destination = ModelPaths.whisper.appending(
+            path: "models/argmaxinc/whisperkit-coreml",
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        report(id: .whisper, ids: ids, portion: 0, transferred: 0, byteTotal: total)
+        var completed = Int64(0)
+        for file in files {
+            if downloadRun.isCancelled || Task.isCancelled { throw CancellationError() }
+            let already = completed
+            let size = Int64(file.size ?? 0)
+            try await HuggingFaceDownloader.download(
+                repository: ModelPaths.whisperRepository,
+                file: file,
+                to: destination,
+                run: downloadRun
+            ) { [weak self] received, _ in
+                let overall = already + received
+                let portion = Double(overall) / Double(total)
+                Task { @MainActor in
+                    self?.report(id: .whisper, ids: ids, portion: portion, transferred: overall, byteTotal: total)
+                }
+            }
+            completed += size
+        }
+        report(id: .whisper, ids: ids, portion: 1, transferred: total, byteTotal: total)
+    }
+
     private func downloadQwen(among ids: [ModelID]) async throws {
         let files = try await HuggingFaceDownloader.list(repository: ModelPaths.qwenRepository)
         let total = max(files.reduce(Int64(0)) { $0 + Int64($1.size ?? 0) }, 1)
+        exactByteCounts[.qwen] = total
         var completed = Int64(0)
-        report(id: .qwen, ids: ids, portion: 0)
+        report(id: .qwen, ids: ids, portion: 0, transferred: 0, byteTotal: total)
         for file in files {
+            if downloadRun.isCancelled { throw CancellationError() }
             let already = completed
             let size = Int64(file.size ?? 0)
             try await HuggingFaceDownloader.download(
                 repository: ModelPaths.qwenRepository,
                 file: file,
-                to: ModelPaths.qwen
+                to: ModelPaths.qwen,
+                run: downloadRun
             ) { [weak self] received, _ in
                 let overall = already + received
                 let portion = Double(overall) / Double(total)
                 Task { @MainActor in
-                    self?.report(id: .qwen, ids: ids, portion: portion)
+                    self?.report(id: .qwen, ids: ids, portion: portion, transferred: overall, byteTotal: total)
                 }
             }
             completed += size
         }
-        report(id: .qwen, ids: ids, portion: 1)
+        report(id: .qwen, ids: ids, portion: 1, transferred: total, byteTotal: total)
     }
 
-    private func report(id: ModelID, ids: [ModelID], portion: Double) {
+    private func report(id: ModelID, ids: [ModelID], portion: Double, transferred: Int64? = nil, byteTotal: Int64? = nil) {
         guard activeModel == id else { return }
         let clamped = min(max(portion, 0), 1)
         activePortion = clamped
+        if let transferred, let byteTotal, byteTotal > 0 {
+            progressDetail = Self.byteProgress(transferred: min(transferred, byteTotal), total: byteTotal)
+        }
         let weights = ids.map { ModelInfo.info($0)?.progressWeight ?? 1 }
         let total = max(weights.reduce(0, +), 0.01)
         var start = 0.0
@@ -267,6 +409,36 @@ final class ModelDownloadManager {
     private var qwenWeightsPresent: Bool {
         FileManager.default.fileExists(atPath: ModelPaths.qwen.appending(path: "model.safetensors").path)
             && FileManager.default.fileExists(atPath: ModelPaths.qwen.appending(path: "config.json").path)
+    }
+
+    /// Removes an unfinished model so the next download does not continue the partial files.
+    private func discardPartialDownload(_ id: ModelID) async {
+        for _ in 0..<5 {
+            try? deleteFiles(id)
+            if !partialFilesRemain(id) {
+                break
+            }
+            try? await Task.detached {
+                try await Task.sleep(for: .milliseconds(200))
+            }.value
+        }
+        installations.clear(id: id)
+        try? installations.save(to: ModelPaths.installations)
+        if id == .whisper {
+            URLCache.shared.removeAllCachedResponses()
+        }
+    }
+
+    private func partialFilesRemain(_ id: ModelID) -> Bool {
+        switch id {
+        case .parakeet:
+            FileManager.default.fileExists(atPath: ModelPaths.parakeet.path)
+                || FileManager.default.fileExists(atPath: ModelPaths.parakeetWeights.path)
+        case .whisper:
+            FileManager.default.fileExists(atPath: ModelPaths.whisper.path)
+        case .qwen:
+            FileManager.default.fileExists(atPath: ModelPaths.qwen.path)
+        }
     }
 
     private func deleteFiles(_ id: ModelID) throws {

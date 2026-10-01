@@ -25,6 +25,7 @@ enum ModelPaths {
     }
 
     static let qwenRepository = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+    static let whisperRepository = "argmaxinc/whisperkit-coreml"
     static var whisperModelName: String { WhisperModelChoice.current }
 }
 
@@ -55,8 +56,20 @@ enum WhisperModelChoice {
         usesTurbo ? "Whisper Large v3 Turbo" : "Whisper Large v3"
     }
 
-    static var displaySize: String {
-        usesTurbo ? "≈ 1.6 GB" : "≈ 0.6 GB"
+    /// Completed weight files are this exact size. A shorter file is a cancelled download, not an install.
+    static func weightRequirements(for modelName: String) -> [String: Int64] {
+        if modelName == compact || modelName.hasSuffix(compact) {
+            return [
+                "config.json": 1149,
+                "AudioEncoder.mlmodelc/weights/weight.bin": 421_968_768,
+                "TextDecoder.mlmodelc/weights/weight.bin": 203_199_860,
+            ]
+        }
+        return [
+            "config.json": 1149,
+            "AudioEncoder.mlmodelc/weights/weight.bin": 1_273_974_400,
+            "TextDecoder.mlmodelc/weights/weight.bin": 343_933_748,
+        ]
     }
 
     static func folderName(for modelName: String) -> String {
@@ -78,9 +91,15 @@ enum WhisperModelChoice {
         }
     }
 
-    static func isInstalled(downloadBase: URL, modelName: String) -> Bool {
-        let config = installedFolder(downloadBase: downloadBase, modelName: modelName)
-            .appending(path: "config.json")
-        return FileManager.default.fileExists(atPath: config.path)
+    static func isInstalled(
+        downloadBase: URL,
+        modelName: String,
+        requirements: [String: Int64]? = nil
+    ) -> Bool {
+        let folder = installedFolder(downloadBase: downloadBase, modelName: modelName)
+        let expected = requirements ?? weightRequirements(for: modelName)
+        return expected.allSatisfy { relative, size in
+            DownloadByteCount.at(folder.appending(path: relative)) == size
+        }
     }
 }

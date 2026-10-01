@@ -35,7 +35,16 @@ struct OnboardingView: View {
             if model.setupStep == 4 {
                 VStack(spacing: DS.spacingS) {
                     ForEach(ModelInfo.catalog) { info in
-                        ModelCard(info: info, state: model.downloads.state(of: info))
+                        let state = model.downloads.state(of: info)
+                        ModelCard(
+                            info: info,
+                            state: state,
+                            errorMessage: model.downloads.errorMessage(for: info.id),
+                            progressDetail: model.downloads.progressDetail(for: info.id),
+                            sizeText: model.downloads.sizeText(for: info.id),
+                            canCancel: isDownloading(state),
+                            onCancel: { model.downloads.cancel() }
+                        )
                     }
                     if model.downloads.isRunning {
                         VStack(alignment: .leading, spacing: 6) {
@@ -45,12 +54,6 @@ struct OnboardingView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .padding(.top, DS.spacingXS)
-                    }
-                    if let error = model.downloads.lastError {
-                        Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .font(.callout)
-                            .foregroundStyle(.red)
-                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
@@ -73,11 +76,19 @@ struct OnboardingView: View {
         .animation(.snappy, value: model.setupStep)
         .glassWindow()
         .task(id: model.setupStep) {
+            if model.setupStep == 4 {
+                await model.downloads.loadExactSizes()
+            }
             while !Task.isCancelled {
                 granted = permissionGranted
                 try? await Task.sleep(for: .seconds(1))
             }
         }
+    }
+
+    private func isDownloading(_ state: ModelState) -> Bool {
+        if case .downloading = state { return true }
+        return false
     }
 
     private var permissionGranted: Bool {
