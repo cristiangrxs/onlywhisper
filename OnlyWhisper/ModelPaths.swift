@@ -57,20 +57,31 @@ enum WhisperModelChoice {
     }
 
     /// Completed weight files are this exact size. A shorter file is a cancelled download, not an install.
+    /// The mel spectrogram is shared by both builds and is required to transcribe without a network call.
     static func weightRequirements(for modelName: String) -> [String: Int64] {
+        var requirements: [String: Int64]
         if modelName == compact || modelName.hasSuffix(compact) {
-            return [
+            requirements = [
                 "config.json": 1149,
                 "AudioEncoder.mlmodelc/weights/weight.bin": 421_968_768,
                 "TextDecoder.mlmodelc/weights/weight.bin": 203_199_860,
             ]
+        } else {
+            requirements = [
+                "config.json": 1149,
+                "AudioEncoder.mlmodelc/weights/weight.bin": 1_273_974_400,
+                "TextDecoder.mlmodelc/weights/weight.bin": 343_933_748,
+            ]
         }
-        return [
-            "config.json": 1149,
-            "AudioEncoder.mlmodelc/weights/weight.bin": 1_273_974_400,
-            "TextDecoder.mlmodelc/weights/weight.bin": 343_933_748,
-        ]
+        requirements.merge(melRequirements) { _, new in new }
+        return requirements
     }
+
+    private static let melRequirements: [String: Int64] = [
+        "MelSpectrogram.mlmodelc/weights/weight.bin": 373_376,
+        "MelSpectrogram.mlmodelc/model.mil": 10_143,
+        "MelSpectrogram.mlmodelc/coremldata.bin": 329,
+    ]
 
     static func folderName(for modelName: String) -> String {
         modelName.hasPrefix("openai_whisper-") ? modelName : "openai_whisper-\(modelName)"
@@ -98,8 +109,49 @@ enum WhisperModelChoice {
     ) -> Bool {
         let folder = installedFolder(downloadBase: downloadBase, modelName: modelName)
         let expected = requirements ?? weightRequirements(for: modelName)
-        return expected.allSatisfy { relative, size in
-            DownloadByteCount.at(folder.appending(path: relative)) == size
+        return ModelFileSet.isComplete(directory: folder, requirements: expected)
+    }
+}
+
+/// Exact byte sizes for the files WhisperKit loads as `openai/whisper-large-v3`.
+/// They live beside the Core ML weights, under the download base, and are deleted with Whisper.
+enum WhisperTokenizerFiles {
+    static let repository = "openai/whisper-large-v3"
+    static let requirements: [String: Int64] = [
+        "tokenizer.json": 2_480_617,
+        "tokenizer_config.json": 282_843,
+    ]
+
+    /// Matches WhisperKit's hub cache: `downloadBase/models/openai/whisper-large-v3`.
+    static func folder(downloadBase: URL) -> URL {
+        downloadBase
+            .appending(component: "models")
+            .appending(component: "openai/whisper-large-v3")
+    }
+
+    static func isInstalled(downloadBase: URL) -> Bool {
+        ModelFileSet.isComplete(directory: folder(downloadBase: downloadBase), requirements: requirements)
+    }
+}
+
+/// Qwen is usable only when the weights and the tokenizer are the full files, not empty placeholders.
+enum QwenModelFiles {
+    static let requirements: [String: Int64] = [
+        "config.json": 938,
+        "model.safetensors": 2_263_022_417,
+        "tokenizer.json": 11_422_654,
+        "tokenizer_config.json": 5_440,
+    ]
+
+    static func isInstalled(at directory: URL) -> Bool {
+        ModelFileSet.isComplete(directory: directory, requirements: requirements)
+    }
+}
+
+enum ModelFileSet {
+    static func isComplete(directory: URL, requirements: [String: Int64]) -> Bool {
+        requirements.allSatisfy { relative, size in
+            DownloadByteCount.at(directory.appending(path: relative)) == size
         }
     }
 }

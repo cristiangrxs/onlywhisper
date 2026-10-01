@@ -23,6 +23,41 @@ final class TextTargetTests: XCTestCase {
             XCTAssertFalse(TextTarget.canAcceptInsertion(role: role, selectedTextSettable: false))
         }
     }
+
+    func testTextFieldIsTheInsertionTarget() {
+        XCTAssertEqual(
+            TextTarget.insertionIndex(in: [("AXTextField", false)]),
+            0
+        )
+    }
+
+    func testAncestorTextAreaIsTheInsertionTarget() {
+        XCTAssertEqual(
+            TextTarget.insertionIndex(in: [
+                ("AXGroup", false),
+                ("AXTextArea", false),
+            ]),
+            1
+        )
+    }
+
+    func testEditableWebSelectionIsTheInsertionTarget() {
+        XCTAssertEqual(
+            TextTarget.insertionIndex(in: [("AXWebArea", true)]),
+            0
+        )
+    }
+
+    func testWindowIsNotAnInsertionTarget() {
+        XCTAssertNil(TextTarget.insertionIndex(in: [("AXWindow", false)]))
+        XCTAssertNil(
+            TextTarget.insertionIndex(in: [
+                ("AXGroup", false),
+                ("AXWebArea", false),
+                ("AXWindow", false),
+            ])
+        )
+    }
 }
 
 final class DictationDeliveryTests: XCTestCase {

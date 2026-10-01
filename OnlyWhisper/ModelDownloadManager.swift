@@ -98,8 +98,12 @@ final class ModelDownloadManager {
     }
 
     /// The expected build is on disk and can still be used, including while an update is waiting.
+    /// A model that is still downloading is not usable, even if a previous partial file is already there.
     func isUsable(_ id: ModelID) -> Bool {
-        filesPresent(id)
+        if isRunning, activeModel == id || queued.contains(id) {
+            return false
+        }
+        return filesPresent(id)
     }
 
     func sizeText(for id: ModelID) -> String? {
@@ -231,9 +235,12 @@ final class ModelDownloadManager {
                 }
                 downloadingID = id
                 try await fetch(id, among: ids)
-                downloadingID = nil
+                guard InstallCommit.shouldRecord(filesPresent: filesPresent(id)) else {
+                    throw DownloadError.failed
+                }
                 installations.set(id: id, revision: ModelRevision.expected(id))
                 try installations.save(to: ModelPaths.installations)
+                downloadingID = nil
                 syncCatalog()
             }
             ModelHub.offlineMode = true
@@ -242,10 +249,10 @@ final class ModelDownloadManager {
         } catch {
             let interrupted = downloadingID
             downloadingID = nil
+            if let interrupted {
+                await discardPartialDownload(interrupted)
+            }
             if DownloadStop.isCancellation(error) || downloadRun.isCancelled {
-                if let interrupted {
-                    await discardPartialDownload(interrupted)
-                }
                 lastError = nil
                 failedModelID = nil
                 status = ""
@@ -305,11 +312,16 @@ final class ModelDownloadManager {
 
     private func downloadWhisper(among ids: [ModelID]) async throws {
         let folder = WhisperModelChoice.folderName(for: ModelPaths.whisperModelName)
-        let files = try await HuggingFaceDownloader.list(
+        let modelFiles = try await HuggingFaceDownloader.list(
             repository: ModelPaths.whisperRepository,
             directory: folder
         )
-        let total = max(files.reduce(Int64(0)) { $0 + Int64($1.size ?? 0) }, 1)
+        let tokenizerFiles = try await tokenizerFilesToFetch()
+        let total = max(
+            modelFiles.reduce(Int64(0)) { $0 + Int64($1.size ?? 0) }
+                + tokenizerFiles.reduce(Int64(0)) { $0 + Int64($1.size ?? 0) },
+            1
+        )
         exactByteCounts[.whisper] = total
         let destination = ModelPaths.whisper.appending(
             path: "models/argmaxinc/whisperkit-coreml",
@@ -318,12 +330,53 @@ final class ModelDownloadManager {
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         report(id: .whisper, ids: ids, portion: 0, transferred: 0, byteTotal: total)
         var completed = Int64(0)
+        completed = try await transfer(
+            modelFiles,
+            repository: ModelPaths.whisperRepository,
+            to: destination,
+            ids: ids,
+            model: .whisper,
+            total: total,
+            completed: completed
+        )
+        let tokenizerDestination = WhisperTokenizerFiles.folder(downloadBase: ModelPaths.whisper)
+        try FileManager.default.createDirectory(at: tokenizerDestination, withIntermediateDirectories: true)
+        completed = try await transfer(
+            tokenizerFiles,
+            repository: WhisperTokenizerFiles.repository,
+            to: tokenizerDestination,
+            ids: ids,
+            model: .whisper,
+            total: total,
+            completed: completed
+        )
+        report(id: .whisper, ids: ids, portion: 1, transferred: total, byteTotal: total)
+    }
+
+    private func tokenizerFilesToFetch() async throws -> [HuggingFaceFile] {
+        let needed = WhisperTokenizerFiles.requirements
+        let listed = try await HuggingFaceDownloader.list(repository: WhisperTokenizerFiles.repository)
+        let selected = listed.filter { needed[$0.path] != nil }
+        guard selected.count == needed.count else { throw DownloadError.failed }
+        return selected
+    }
+
+    private func transfer(
+        _ files: [HuggingFaceFile],
+        repository: String,
+        to destination: URL,
+        ids: [ModelID],
+        model: ModelID,
+        total: Int64,
+        completed: Int64
+    ) async throws -> Int64 {
+        var completed = completed
         for file in files {
             if downloadRun.isCancelled || Task.isCancelled { throw CancellationError() }
             let already = completed
             let size = Int64(file.size ?? 0)
             try await HuggingFaceDownloader.download(
-                repository: ModelPaths.whisperRepository,
+                repository: repository,
                 file: file,
                 to: destination,
                 run: downloadRun
@@ -331,12 +384,12 @@ final class ModelDownloadManager {
                 let overall = already + received
                 let portion = Double(overall) / Double(total)
                 Task { @MainActor in
-                    self?.report(id: .whisper, ids: ids, portion: portion, transferred: overall, byteTotal: total)
+                    self?.report(id: model, ids: ids, portion: portion, transferred: overall, byteTotal: total)
                 }
             }
             completed += size
         }
-        report(id: .whisper, ids: ids, portion: 1, transferred: total, byteTotal: total)
+        return completed
     }
 
     private func downloadQwen(among ids: [ModelID]) async throws {
@@ -401,14 +454,10 @@ final class ModelDownloadManager {
             AsrModels.modelsExist(at: ModelPaths.parakeet, version: .ultra, encoderPrecision: .int8)
         case .whisper:
             WhisperModelChoice.isInstalled(downloadBase: ModelPaths.whisper, modelName: ModelPaths.whisperModelName)
+                && WhisperTokenizerFiles.isInstalled(downloadBase: ModelPaths.whisper)
         case .qwen:
-            qwenWeightsPresent
+            QwenModelFiles.isInstalled(at: ModelPaths.qwen)
         }
-    }
-
-    private var qwenWeightsPresent: Bool {
-        FileManager.default.fileExists(atPath: ModelPaths.qwen.appending(path: "model.safetensors").path)
-            && FileManager.default.fileExists(atPath: ModelPaths.qwen.appending(path: "config.json").path)
     }
 
     /// Removes an unfinished model so the next download does not continue the partial files.

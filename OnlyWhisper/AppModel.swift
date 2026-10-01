@@ -76,6 +76,8 @@ final class AppModel {
     var rewriteInstruction = ""
     var showRewrite = false
     var isSmoothing = false
+    /// True while Whisper is opening, so the capsule can say so instead of showing an empty transcript.
+    var isPreparingSpeech = false
     /// Set before opening Settings so the window lands on that tab. Cleared once applied.
     var settingsTabRequest: String?
 
@@ -92,6 +94,9 @@ final class AppModel {
     private var transcribedUntil: Int = 0
     private var meetingTimer: Task<Void, Never>?
     private var dictationTask: Task<Void, Never>?
+    private var finishTask: Task<Void, Never>?
+    private var prewarmTask: Task<Void, Never>?
+    private var speechTimedOut = false
     private var insertedTask: Task<Void, Never>?
     private var pendingCopyTask: Task<Void, Never>?
     private var dictationEpoch = 0
@@ -115,9 +120,12 @@ final class AppModel {
         hotkeys.onRelease = { [weak self] duration in self?.dictationReleased(after: duration) }
         hotkeys.onEscape = { [weak self] in
             guard let self else { return }
-            if self.phase == .recording || self.phase == .handsFree {
+            switch self.phase {
+            case .recording, .handsFree:
                 self.cancelCapture()
-            } else {
+            case .working:
+                self.requestFinishCancellation()
+            case .idle:
                 self.dismissPendingCopy()
             }
         }
@@ -261,10 +269,10 @@ final class AppModel {
             object: nil,
             queue: .main
         ) { notification in
-            let closing = notification.object as? NSWindow
+            let closingNumber = (notification.object as? NSWindow)?.windowNumber
             Task { @MainActor in
                 let stillOpen = NSApp.windows.contains { window in
-                    window !== closing && window.isVisible && window.canBecomeMain && !(window is NSPanel)
+                    window.windowNumber != closingNumber && window.isVisible && window.canBecomeMain && !(window is NSPanel)
                 }
                 if !stillOpen {
                     NSApp.setActivationPolicy(.accessory)
@@ -280,29 +288,35 @@ final class AppModel {
 
     func downloadModel(_ id: ModelID) async {
         guard canChangeModels else { return }
+        await releaseSpeechModels()
         await downloads.download(id)
+        await unloadSpeechModels()
     }
 
     func downloadMissingModels() async {
         guard canChangeModels else { return }
+        await releaseSpeechModels()
         await downloads.downloadMissing()
+        await unloadSpeechModels()
     }
 
     func updateModel(_ id: ModelID) async {
         guard canChangeModels else { return }
-        await unloadSpeechModels()
+        await releaseSpeechModels()
         await downloads.update(id)
+        await unloadSpeechModels()
     }
 
     func updateOutdatedModels() async {
         guard canChangeModels else { return }
-        await unloadSpeechModels()
+        await releaseSpeechModels()
         await downloads.updateOutdated()
+        await unloadSpeechModels()
     }
 
     func removeModel(_ id: ModelID) async {
         guard canChangeModels else { return }
-        await unloadSpeechModels()
+        await releaseSpeechModels()
         downloads.remove(id)
     }
 
@@ -312,6 +326,10 @@ final class AppModel {
     @discardableResult
     private func requireUsableModel(_ id: ModelID) -> Bool {
         guard downloads.isUsable(id) else {
+            if downloads.isRunning {
+                showOverlayHint(t("The model is still downloading.", "Das Modell wird noch geladen."))
+                return false
+            }
             if settings.setupCompleted {
                 let name = ModelInfo.info(id)?.name ?? ""
                 showOverlayHint(t("\(name) is not on this Mac.", "\(name) ist nicht auf diesem Mac."))
@@ -332,12 +350,29 @@ final class AppModel {
         await qwen.unload()
     }
 
+    /// Drops a prewarm and any model loaded before the files on disk change.
+    private func releaseSpeechModels() async {
+        cancelPrewarm()
+        await unloadSpeechModels()
+    }
+
+    private func cancelPrewarm() {
+        prewarmTask?.cancel()
+        prewarmTask = nil
+    }
+
+    private func prewarmPolisherIfNeeded() {
+        cancelPrewarm()
+        guard settings.polishEnabled, downloads.isUsable(.qwen) else { return }
+        prewarmTask = Task { await qwen.prewarm() }
+    }
+
     func startHandsFree() {
         beginRecording(handsFree: true)
     }
 
     func finishHandsFree() {
-        Task { await finishDictation() }
+        beginFinish()
     }
 
     func open(_ id: String) {
@@ -440,14 +475,14 @@ final class AppModel {
         return part(.commandPalette) + "|" + part(.rewriteSelection)
     }
 
-    func showOverlayHint(_ text: String) {
+    func showOverlayHint(_ text: String, milliseconds: Int = 1500) {
         clearInsertedConfirmation()
         clearPendingCopy()
         hintTask?.cancel()
         overlayHint = text
         OverlayPanel.shared.show()
         hintTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(1500))
+            try? await Task.sleep(for: .milliseconds(milliseconds))
             guard let self, self.phase == .idle else { return }
             self.overlayHint = nil
             if self.pendingCopyText == nil, !self.dictationInserted {
@@ -470,7 +505,10 @@ final class AppModel {
             requestInputMonitoring()
             setupStep = 4
         default:
+            cancelPrewarm()
+            await unloadSpeechModels()
             await downloads.downloadRequiredModels()
+            await unloadSpeechModels()
             if downloads.isReady {
                 settings.setupCompleted = true
                 needsSetup = false
@@ -521,7 +559,7 @@ final class AppModel {
     private func dictationPressed() {
         switch phase {
         case .handsFree:
-            Task { await finishDictation() }
+            beginFinish()
         case .idle:
             beginRecording(handsFree: false)
         default:
@@ -535,7 +573,11 @@ final class AppModel {
             phase = .handsFree
             return
         }
-        Task { await finishDictation() }
+        beginFinish()
+    }
+
+    private func beginFinish() {
+        finishTask = Task { await self.finishDictation() }
     }
 
     private func beginRecording(handsFree: Bool) {
@@ -552,6 +594,8 @@ final class AppModel {
         dictationSession.reset()
         dictationCursor = 0
         isSmoothing = false
+        isPreparingSpeech = false
+        speechTimedOut = false
         livePreview = ""
         clearInsertedConfirmation()
         clearPendingCopy()
@@ -561,17 +605,28 @@ final class AppModel {
         do {
             try recorder.start()
             phase = handsFree ? .handsFree : .recording
+            isPreparingSpeech = true
             OverlayPanel.shared.show()
             let epoch = dictationEpoch
+            let router = speech
             dictationTask = Task {
-                await speech.resetUtterance()
-                await speech.prepare()
-                await runDictationLoop(epoch: epoch)
+                await router.resetUtterance()
+                do {
+                    try await AsyncDeadline.value(ModelDeadline.speechLoad) {
+                        try await router.prepare()
+                    }
+                } catch {
+                    guard !Task.isCancelled, epoch == self.dictationEpoch else { return }
+                    self.failSpeechPreparation(timedOut: error is AsyncDeadline.TimedOut)
+                    return
+                }
+                guard epoch == self.dictationEpoch, !Task.isCancelled else { return }
+                self.isPreparingSpeech = false
+                await self.runDictationLoop(epoch: epoch)
             }
-            if settings.polishEnabled, downloads.isUsable(.qwen) {
-                Task { await qwen.prewarm() }
-            }
+            prewarmPolisherIfNeeded()
         } catch {
+            isPreparingSpeech = false
             statusMessage = error.localizedDescription
         }
     }
@@ -581,11 +636,13 @@ final class AppModel {
         dictationEpoch += 1
         dictationTask?.cancel()
         dictationTask = nil
+        cancelPrewarm()
         _ = recorder.stop()
         TextInserter.revertInsertion()
         dictationSession.reset()
         livePreview = ""
         isSmoothing = false
+        isPreparingSpeech = false
         phase = .idle
         level = 0
         clearPendingCopy()
@@ -599,41 +656,128 @@ final class AppModel {
         }
     }
 
-    /// The raw words are already in the field. The writing model runs once over all of them and replaces the draft.
+    private func failSpeechPreparation(timedOut: Bool) {
+        dictationEpoch += 1
+        dictationTask?.cancel()
+        dictationTask = nil
+        cancelPrewarm()
+        _ = recorder.stop()
+        TextInserter.revertInsertion()
+        dictationSession.reset()
+        livePreview = ""
+        isPreparingSpeech = false
+        isSmoothing = false
+        phase = .idle
+        level = 0
+        clearPendingCopy()
+        Task {
+            await speech.unload()
+            await qwen.unload()
+        }
+        let message = timedOut
+            ? t("Speech recognition is taking too long.", "Spracherkennung dauert zu lange.")
+            : t("Speech recognition could not be loaded.", "Spracherkennung konnte nicht geladen werden.")
+        showOverlayHint(message, milliseconds: 3200)
+    }
+
+    /// Escape during recognition or polishing. The finish task inserts whatever was already heard.
+    private func requestFinishCancellation() {
+        guard case .working = phase else { return }
+        dictationEpoch += 1
+        finishTask?.cancel()
+        cancelPrewarm()
+        let keepSpeech = meetingActive
+        Task {
+            if !keepSpeech {
+                await speech.unload()
+            }
+            await qwen.unload()
+        }
+    }
+
+    /// The raw words are already in the field. Recognition finishes first, then the writing model replaces the draft.
     private func finishDictation() async {
         guard phase == .recording || phase == .handsFree else { return }
         dictationEpoch += 1
         let epoch = dictationEpoch
         dictationTask?.cancel()
         dictationTask = nil
-        phase = .working(t("Smoothing", "Glättet"))
+        cancelPrewarm()
+        isPreparingSpeech = false
+        speechTimedOut = false
+        phase = .working(t("Transcribing…", "Wird erkannt…"))
         let samples = recorder.stop()
         level = 0
-        await transcribeOpenAudio(samples, epoch: epoch, final: true)
-        dictationSession.settleOpen()
-        let raw = dictationSession.text
-        var finished = ruled(raw)
-        if settings.polishEnabled, downloads.isUsable(.qwen), !finished.isEmpty {
-            isSmoothing = true
-            finished = await polishDictation(finished)
+        do {
+            try await transcribeOpenAudio(samples, epoch: epoch, final: true)
+            try Task.checkCancellation()
+            guard epoch == dictationEpoch else { throw CancellationError() }
+            dictationSession.settleOpen()
+            let raw = dictationSession.text
+            var finished = ruled(raw)
+            var fellBack = false
+            if settings.polishEnabled, downloads.isUsable(.qwen), !finished.isEmpty {
+                phase = .working(t("Polishing…", "Poliert…"))
+                isSmoothing = true
+                let outcome = try await polishDictation(finished)
+                isSmoothing = false
+                try Task.checkCancellation()
+                guard epoch == dictationEpoch else { throw CancellationError() }
+                finished = outcome.text
+                fellBack = outcome.fellBack
+            }
+            await qwen.unload()
+            if !meetingActive {
+                await speech.unload()
+            }
+            try Task.checkCancellation()
+            guard epoch == dictationEpoch else { throw CancellationError() }
+            await deliver(raw: raw, finished: finished, fellBack: fellBack)
+        } catch is CancellationError {
+            await deliverCancelledDictation()
+        } catch {
             isSmoothing = false
+            statusMessage = error.localizedDescription
+            await deliverCancelledDictation()
         }
-        await qwen.unload()
+    }
+
+    private func deliver(raw: String, finished: String, fellBack: Bool) async {
         let text = finished.trimmingCharacters(in: .whitespacesAndNewlines)
         let didInsert: Bool
         if text.isEmpty {
             TextInserter.revertInsertion()
             didInsert = false
         } else {
-            didInsert = TextInserter.replaceInsertion(with: text, allowPasteFallback: true)
+            didInsert = await TextInserter.replaceInsertion(with: text, allowPasteFallback: true)
             history.add(source: "dictation", raw: raw, polished: text)
-        }
-        if !meetingActive {
-            await speech.unload()
         }
         dictationSession.reset()
         livePreview = ""
+        isSmoothing = false
+        isPreparingSpeech = false
         phase = .idle
+        if text.isEmpty {
+            if speechTimedOut {
+                showOverlayHint(
+                    t("Speech recognition is taking too long.", "Spracherkennung dauert zu lange."),
+                    milliseconds: 3200
+                )
+            } else {
+                showOverlayHint(t("Nothing heard", "Nichts verstanden"))
+            }
+            return
+        }
+        if fellBack, didInsert {
+            showOverlayHint(
+                t(
+                    "Polishing was not possible. The original text was inserted.",
+                    "Glätten nicht möglich, Rohtext eingefügt."
+                ),
+                milliseconds: 3200
+            )
+            return
+        }
         switch DictationDelivery.decide(text: text, inserted: didInsert) {
         case .nothingHeard:
             showOverlayHint(t("Nothing heard", "Nichts verstanden"))
@@ -641,6 +785,44 @@ final class AppModel {
             confirmInsertion()
         case .holdForCopy:
             holdForCopy(text)
+        }
+    }
+
+    /// Escape while recognizing or polishing keeps the words heard so far and leaves the capsule.
+    private func deliverCancelledDictation() async {
+        let raw = dictationSession.text
+        let text = ruled(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        isSmoothing = false
+        isPreparingSpeech = false
+        if text.isEmpty {
+            TextInserter.revertInsertion()
+            dictationSession.reset()
+            livePreview = ""
+            phase = .idle
+            level = 0
+            OverlayPanel.shared.hide()
+        } else {
+            let didInsert = await TextInserter.replaceInsertion(with: text, allowPasteFallback: true)
+            history.add(source: "dictation", raw: raw, polished: text)
+            dictationSession.reset()
+            livePreview = ""
+            phase = .idle
+            level = 0
+            switch DictationDelivery.decide(text: text, inserted: didInsert) {
+            case .nothingHeard:
+                OverlayPanel.shared.hide()
+            case .inserted:
+                confirmInsertion()
+            case .holdForCopy:
+                holdForCopy(text)
+            }
+        }
+        let keepSpeech = meetingActive
+        Task {
+            if !keepSpeech {
+                await speech.unload()
+            }
+            await qwen.unload()
         }
     }
 
@@ -654,7 +836,13 @@ final class AppModel {
             let count = samples.count
             let open = Array(samples[dictationCursor..<count])
             let heardSpeech = SpeechPresence.containsSpeech(open)
-            await transcribeOpenAudio(samples, epoch: epoch, final: false)
+            do {
+                try await transcribeOpenAudio(samples, epoch: epoch, final: false)
+            } catch is CancellationError {
+                return
+            } catch {
+                continue
+            }
             guard epoch == dictationEpoch, !Task.isCancelled else { return }
             let added = recorder.snapshot().count - count
             if !heardSpeech || added < 3_200 {
@@ -665,33 +853,45 @@ final class AppModel {
 
     /// Transcribes the open segment again and writes the raw words into the field.
     /// A pause, a long segment, or the end of the dictation freezes it so the next pass starts after it.
-    private func transcribeOpenAudio(_ samples: [Float], epoch: Int, final: Bool) async {
+    private func transcribeOpenAudio(_ samples: [Float], epoch: Int, final: Bool) async throws {
         let end = samples.count
         var start = dictationCursor
         var changed = false
-        defer {
+        func publishIfNeeded() async {
             if changed, epoch == dictationEpoch, !final {
-                publishLive()
+                await publishLive()
             }
         }
-        while epoch == dictationEpoch, end - start >= Self.minimumSpeechSamples {
-            let cut = final ? end : SpeechPause.settlePoint(in: samples, from: start, to: end)
-            let stop = cut ?? end
-            let slice = Array(samples[start..<stop])
-            let heard: String?
-            if SpeechPresence.containsSpeech(slice) {
-                heard = await transcribe(samples, from: start, to: stop, epoch: epoch, live: !final)
-            } else {
-                heard = ""
+        do {
+            while epoch == dictationEpoch, end - start >= Self.minimumSpeechSamples {
+                let cut = final ? end : SpeechPause.settlePoint(in: samples, from: start, to: end)
+                let stop = cut ?? end
+                let slice = Array(samples[start..<stop])
+                let heard: String?
+                if SpeechPresence.containsSpeech(slice) {
+                    heard = try await transcribe(samples, from: start, to: stop, epoch: epoch, live: !final)
+                } else {
+                    heard = ""
+                }
+                guard let heard else {
+                    await publishIfNeeded()
+                    return
+                }
+                if dictationSession.updateOpen(heard) {
+                    changed = true
+                }
+                guard cut != nil else {
+                    await publishIfNeeded()
+                    return
+                }
+                dictationSession.settleOpen()
+                dictationCursor = stop
+                start = stop
             }
-            guard let heard else { return }
-            if dictationSession.updateOpen(heard) {
-                changed = true
-            }
-            guard cut != nil else { return }
-            dictationSession.settleOpen()
-            dictationCursor = stop
-            start = stop
+            await publishIfNeeded()
+        } catch {
+            await publishIfNeeded()
+            throw error
         }
     }
 
@@ -704,16 +904,23 @@ final class AppModel {
         to end: Int,
         epoch: Int,
         live: Bool
-    ) async -> String? {
+    ) async throws -> String? {
+        let slice = Array(samples[start..<end])
+        let choice = settings.language
+        let router = speech
+        let limit = live ? ModelDeadline.liveTranscription : ModelDeadline.finalTranscription
         do {
-            let text = try await speech.transcribe(
-                samples: Array(samples[start..<end]),
-                choice: settings.language,
-                live: live,
-                dictation: true
-            )
+            let text = try await AsyncDeadline.value(limit) {
+                try await router.transcribe(samples: slice, choice: choice, live: live, dictation: true)
+            }
             guard epoch == dictationEpoch else { return nil }
             return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch is AsyncDeadline.TimedOut {
+            guard epoch == dictationEpoch else { return nil }
+            if !live { speechTimedOut = true }
+            return nil
         } catch {
             guard epoch == dictationEpoch else { return nil }
             statusMessage = error.localizedDescription
@@ -721,25 +928,40 @@ final class AppModel {
         }
     }
 
-    private func publishLive() {
+    private func publishLive() async {
         let text = dictationSession.text
-        livePreview = text
         if text.isEmpty {
-            TextInserter.revertInsertion()
-            TextInserter.beginInsertion()
+            TextInserter.undoLiveInsertion()
+            livePreview = ""
             return
         }
-        _ = TextInserter.replaceInsertion(with: text)
+        let written = await TextInserter.replaceInsertion(with: text)
+        livePreview = written ? "" : text
     }
 
     /// Long dictations go through in pieces so none is cut off. A piece that fails keeps its unpolished text.
-    private func polishDictation(_ text: String) async -> String {
+    private func polishDictation(_ text: String) async throws -> PolishFallback.Step {
         var result = ""
+        var fellBack = false
+        let polisher = qwen
         for piece in DictationSession.polishChunks(text, limit: 1_500) {
-            let polished = (try? await qwen.polish(raw: piece, kind: .dictation)) ?? piece
-            result = DictationSession.joined(result, polished)
+            try Task.checkCancellation()
+            let outcome: Result<String, Error>
+            do {
+                let polished = try await AsyncDeadline.value(ModelDeadline.polish) {
+                    try await polisher.polish(raw: piece, kind: .dictation)
+                }
+                outcome = .success(polished)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                outcome = .failure(error)
+            }
+            let step = PolishFallback.resolve(original: piece, result: outcome)
+            if step.fellBack { fellBack = true }
+            result = DictationSession.joined(result, step.text)
         }
-        return result
+        return PolishFallback.Step(text: result, fellBack: fellBack)
     }
 
     private func confirmInsertion() {
@@ -834,7 +1056,11 @@ final class AppModel {
         phase = .working(t("Rewriting", "Formuliert"))
         defer { phase = .idle }
         do {
-            let revised = try await qwen.polish(raw: rewriteText, kind: .rewrite(instruction))
+            let polisher = qwen
+            let source = rewriteText
+            let revised = try await AsyncDeadline.value(ModelDeadline.polish) {
+                try await polisher.polish(raw: source, kind: .rewrite(instruction))
+            }
             await qwen.unload()
             TextInserter.insert(revised)
             history.add(source: "rewrite", raw: rewriteText, polished: revised)
@@ -884,7 +1110,10 @@ final class AppModel {
                 return speaker + chunk.text
             }.joined(separator: "\n")
             if settings.polishEnabled, downloads.isUsable(.qwen), !transcript.isEmpty {
-                let reply = try await qwen.polish(raw: transcript, kind: .meeting)
+                let polisher = qwen
+                let reply = try await AsyncDeadline.value(ModelDeadline.polish) {
+                    try await polisher.polish(raw: transcript, kind: .meeting)
+                }
                 await qwen.unload()
                 meetingNotes = Self.parseNotes(reply)
             }
@@ -912,7 +1141,11 @@ final class AppModel {
         let startTime = Double(start) / 16_000
         let endTime = Double(fullCount) / 16_000
         do {
-            let text = try await speech.transcribe(samples: slice, choice: settings.language)
+            let router = speech
+            let choice = settings.language
+            let text = try await AsyncDeadline.value(ModelDeadline.finalTranscription) {
+                try await router.transcribe(samples: slice, choice: choice)
+            }
             guard !text.isEmpty else { return }
             meetingChunks.append(TranscriptChunk(start: startTime, end: endTime, text: text, speaker: nil))
         } catch {

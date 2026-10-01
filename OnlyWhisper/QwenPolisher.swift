@@ -34,10 +34,11 @@ actor QwenPolisher {
     func unload() {
         generation += 1
         container = nil
+        loading?.cancel()
         loading = nil
     }
 
-    /// Concurrent callers share one load. A load that finishes after `unload()` is handed back but not kept.
+    /// Concurrent callers share one load. A load that finishes after `unload()` is dropped.
     private func load() async throws -> ModelContainer {
         if let container { return container }
         let task: Task<ModelContainer, Error>
@@ -55,13 +56,14 @@ actor QwenPolisher {
         let started = generation
         do {
             let loaded = try await task.value
-            if generation == started {
-                container = loaded
-                loading = nil
+            guard ModelLoadGuard.keeps(started: started, current: generation) else {
+                throw CancellationError()
             }
+            container = loaded
+            loading = nil
             return loaded
         } catch {
-            if generation == started {
+            if ModelLoadGuard.keeps(started: started, current: generation) {
                 loading = nil
             }
             throw error

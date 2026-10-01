@@ -673,7 +673,7 @@ struct RecordingOverlay: View {
             .padding(.horizontal, 14)
             .frame(height: 44)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(t("Polishing…", "Poliert…"))
+            .accessibilityLabel(workingLabel)
     }
 
     /// Lines that fit before the capsule would pass about 70% of the screen. Older words drop off the top.
@@ -697,15 +697,16 @@ struct RecordingOverlay: View {
     private static let polishTint = Color(red: 176 / 255, green: 166 / 255, blue: 240 / 255)
 
     private var polishingRow: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 14, weight: .semibold))
-                .symbolEffect(.pulse, options: .repeating, isActive: shownMode == .polishing && !reduceMotion)
-            Text(t("Polishing…", "Poliert…"))
+        let polishing = model.isSmoothing
+        return HStack(spacing: 8) {
+            Image(systemName: polishing ? "sparkles" : "waveform")
+                .font(.system(size: polishing ? 14 : 13, weight: .semibold))
+                .symbolEffect(.pulse, options: .repeating, isActive: shownMode == .polishing && polishing && !reduceMotion)
+            Text(workingLabel)
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
         }
-        .foregroundStyle(Self.polishTint)
+        .foregroundStyle(polishing ? AnyShapeStyle(Self.polishTint) : AnyShapeStyle(.primary))
     }
 
     private var listeningRow: some View {
@@ -728,11 +729,21 @@ struct RecordingOverlay: View {
         model.phase == .recording || model.phase == .handsFree
     }
 
+    private var workingLabel: String {
+        if case .working(let text) = model.phase, !text.isEmpty {
+            return text
+        }
+        return t("Polishing…", "Poliert…")
+    }
+
     /// Stays on the listening words while that row fades out, so it does not flip to a spinner first.
     private var listeningTitle: String {
+        if model.isPreparingSpeech {
+            return t("Preparing model…", "Modell wird vorbereitet…")
+        }
         switch model.phase {
-        case .handsFree: t("Hands-free", "Freisprechen")
-        default: t("Listening", "Hört zu")
+        case .handsFree: return t("Hands-free", "Freisprechen")
+        default: return t("Listening", "Hört zu")
         }
     }
 }

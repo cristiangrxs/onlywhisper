@@ -3,11 +3,13 @@ import WhisperKit
 
 actor WhisperEngine {
     private var pipe: WhisperKit?
+    /// Bumped by `unload()` so a load that was already in flight cannot be reused.
+    private var generation = 0
     /// Language detected for the current utterance, so later live passes skip detection.
     private var lockedLanguage: String?
 
-    func prepare() async {
-        _ = try? await load()
+    func prepare() async throws {
+        try await load()
     }
 
     func resetUtterance() {
@@ -22,7 +24,11 @@ actor WhisperEngine {
         live: Bool = false,
         dictation: Bool = false
     ) async throws -> String {
+        let started = generation
         let pipe = try await load()
+        guard ModelLoadGuard.keeps(started: started, current: generation) else {
+            throw CancellationError()
+        }
         let language = languageCode ?? (live ? lockedLanguage : nil)
         let url = try WavWriter.write(samples: samples)
         defer { try? FileManager.default.removeItem(at: url) }
@@ -39,6 +45,9 @@ actor WhisperEngine {
             noSpeechThreshold: Self.noSpeechThreshold
         )
         let results = try await pipe.transcribe(audioPath: url.path, decodeOptions: options)
+        guard ModelLoadGuard.keeps(started: started, current: generation) else {
+            throw CancellationError()
+        }
         if live, languageCode == nil, lockedLanguage == nil {
             let detected = results.first?.language ?? ""
             if !detected.isEmpty { lockedLanguage = detected }
@@ -81,12 +90,14 @@ actor WhisperEngine {
     }
 
     func unload() {
+        generation += 1
         pipe = nil
         lockedLanguage = nil
     }
 
     private func load() async throws -> WhisperKit {
         if let pipe { return pipe }
+        let started = generation
         let folder = WhisperModelChoice.installedFolder(
             downloadBase: ModelPaths.whisper,
             modelName: ModelPaths.whisperModelName
@@ -102,6 +113,10 @@ actor WhisperEngine {
             download: false
         )
         let created = try await WhisperKit(config)
+        guard ModelLoadGuard.keeps(started: started, current: generation) else {
+            throw CancellationError()
+        }
+        if let pipe { return pipe }
         pipe = created
         return created
     }

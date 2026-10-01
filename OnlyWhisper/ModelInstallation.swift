@@ -92,3 +92,10 @@ struct ModelInstallationStore: Equatable, Codable, Sendable {
         return .missing
     }
 }
+
+enum InstallCommit {
+    /// A revision is stored only after every required file is complete. Otherwise the download is discarded.
+    static func shouldRecord(filesPresent: Bool) -> Bool {
+        filesPresent
+    }
+}

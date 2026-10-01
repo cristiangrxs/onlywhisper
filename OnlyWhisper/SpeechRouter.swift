@@ -3,8 +3,8 @@ import Foundation
 actor SpeechRouter {
     private let whisper = WhisperEngine()
 
-    func prepare() async {
-        await whisper.prepare()
+    func prepare() async throws {
+        try await whisper.prepare()
     }
 
     func resetUtterance() async {
