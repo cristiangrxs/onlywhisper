@@ -15,6 +15,7 @@
 		BF000006 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = PD000006 /* KeyboardShortcuts */; };
 		BF000007 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = PD000007 /* Tokenizers */; };
 		BF000008 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = PD000008 /* Sparkle */; };
+		BF000009 /* SFBAudioEngine in Frameworks */ = {isa = PBXBuildFile; productRef = PD000009 /* SFBAudioEngine */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -72,6 +73,7 @@
 				BF000006 /* KeyboardShortcuts in Frameworks */,
 				BF000007 /* Tokenizers in Frameworks */,
 				BF000008 /* Sparkle in Frameworks */,
+				BF000009 /* SFBAudioEngine in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -123,6 +125,7 @@
 				PD000006 /* KeyboardShortcuts */,
 				PD000007 /* Tokenizers */,
 				PD000008 /* Sparkle */,
+				PD000009 /* SFBAudioEngine */,
 			);
 			productName = OnlyWhisper;
 			productReference = FR000001 /* OnlyWhisper.app */;
@@ -180,6 +183,7 @@
 				PK000004 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
 				PK000005 /* XCRemoteSwiftPackageReference "swift-transformers" */,
 				PK000006 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				PK000007 /* XCRemoteSwiftPackageReference "SFBAudioEngine" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = GR000001;
@@ -431,6 +435,14 @@
 				minimumVersion = 2.6.0;
 			};
 		};
+		PK000007 /* XCRemoteSwiftPackageReference "SFBAudioEngine" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sbooth/SFBAudioEngine.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.13.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -473,6 +485,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = PK000006 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		PD000009 /* SFBAudioEngine */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = PK000007 /* XCRemoteSwiftPackageReference "SFBAudioEngine" */;
+			productName = SFBAudioEngine;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

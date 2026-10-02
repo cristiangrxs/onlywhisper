@@ -521,7 +521,7 @@ struct CommandPaletteView: View {
             result.append(PaletteCommand(
                 id: "history.\(entry.id.uuidString)",
                 section: .recent,
-                title: entry.polished.firstLine,
+                title: entry.listTitle,
                 symbol: style.symbol,
                 tint: style.tint,
                 accessory: entry.date.formatted(.relative(presentation: .named)),
@@ -627,6 +627,10 @@ struct HistoryStyle {
             symbol = "person.2.fill"
             tint = .orange
             title = t("Meeting", "Meeting")
+        case "file":
+            symbol = "doc.text.fill"
+            tint = .teal
+            title = t("File", "Datei")
         default:
             symbol = "mic.fill"
             tint = .blue

@@ -10,7 +10,7 @@ extension KeyboardShortcuts.Name {
         "rewriteSelection",
         default: .init(.e, modifiers: [.command, .shift])
     )
-    /// Must not use Option (both dictation keys are Option keys). Cmd+Shift+Space belongs to Siri on macOS 27.
+    /// Avoids the default dictation key (right Option) and Siri's Cmd+Shift+Space on macOS 27.
     nonisolated(unsafe) static let commandPalette = Self(
         "commandPalette",
         default: .init(.space, modifiers: [.control, .shift])
@@ -106,6 +106,9 @@ final class AppModel {
     private var watchesActivation = false
     private var watchesShortcuts = false
     private var shortcutSignature = ""
+    private var shortcutsPausedForCapture = false
+    /// Set while a shortcut recorder is listening, so a second recorder can take over.
+    private(set) var shortcutCaptureID: UUID?
     private var permissionWatch: Task<Void, Never>?
     private var hintTask: Task<Void, Never>?
 
@@ -137,6 +140,22 @@ final class AppModel {
         }
         refreshShortcutConflicts()
         watchShortcutChanges()
+        files.record = { [history] url, text in
+            history.add(
+                source: "file",
+                title: url.lastPathComponent,
+                raw: url.path(percentEncoded: false),
+                polished: text
+            )
+        }
+    }
+
+    /// History row to reveal when the History window opens. A new token selects the same entry again.
+    var historyFocus: HistoryFocus?
+
+    func showFileTranscript(_ id: HistoryEntry.ID) {
+        historyFocus = HistoryFocus(id: id)
+        open("history")
     }
 
     func bind(openWindow: @escaping (String) -> Void, openSettings: @escaping () -> Void) {
@@ -281,9 +300,34 @@ final class AppModel {
         }
     }
 
+    var canTranscribeFiles: Bool {
+        downloads.isUsable(speechModel)
+    }
+
     func enqueueFiles(_ urls: [URL]) {
         guard requireUsableModel(speechModel) else { return }
         files.enqueue(urls, speech: speech, language: settings.language)
+    }
+
+    func retryFile(_ id: FileJob.ID) {
+        guard requireUsableModel(speechModel) else { return }
+        files.retry(id, speech: speech, language: settings.language)
+    }
+
+    func clearFinishedFiles() {
+        files.clearFinished()
+    }
+
+    func noteFileImportFailure(_ error: Error) {
+        files.noteImportFailure(error)
+    }
+
+    func showFileModelHelp() {
+        if settings.setupCompleted {
+            showModelSettings()
+        } else {
+            _ = requireUsableModel(speechModel)
+        }
     }
 
     func downloadModel(_ id: ModelID) async {
@@ -416,11 +460,32 @@ final class AppModel {
         ensureHotkeys()
     }
 
-    /// Arms the Option-key listener once Input Monitoring is granted, and again after the
+    /// Arms the dictation listener once Input Monitoring is granted, and again after the
     /// system disables the tap. Safe to call whenever the menu bar or Settings opens.
     func ensureHotkeys() {
-        hotkeys.keyCode = settings.dictationKey.keyCode
-        hotkeyReady = hotkeys.start()
+        hotkeys.binding = settings.dictationKey
+        hotkeyReady = hotkeys.start(canFilter: accessibilityGranted)
+    }
+
+    /// Pauses global shortcuts and dictation so the keys being recorded do not fire.
+    func beginShortcutCapture() -> UUID {
+        let id = UUID()
+        shortcutCaptureID = id
+        if !shortcutsPausedForCapture {
+            shortcutsPausedForCapture = true
+            ShortcutProbe.setEnabled(false)
+            hotkeys.isPaused = true
+        }
+        return id
+    }
+
+    func endShortcutCapture(_ id: UUID) {
+        guard shortcutCaptureID == id else { return }
+        shortcutCaptureID = nil
+        guard shortcutsPausedForCapture else { return }
+        shortcutsPausedForCapture = false
+        ShortcutProbe.setEnabled(true)
+        hotkeys.isPaused = false
     }
 
     func refreshShortcutConflicts() {
@@ -428,7 +493,7 @@ final class AppModel {
         shortcutRevision += 1
     }
 
-    /// Arms the Option-key listener as soon as Input Monitoring is granted, without requiring a click.
+    /// Arms the dictation listener as soon as Input Monitoring is granted, without requiring a click.
     private func watchPermissions() {
         guard permissionWatch == nil else { return }
         permissionWatch = Task { [weak self] in
@@ -524,8 +589,14 @@ final class AppModel {
 
     func updateDictationKey(_ key: DictationKey) {
         settings.dictationKey = key
-        hotkeys.keyCode = key.keyCode
+        hotkeys.binding = key
         ensureHotkeys()
+    }
+
+    func resetShortcuts() {
+        KeyboardShortcuts.reset(.commandPalette, .rewriteSelection)
+        updateDictationKey(.rightOption)
+        refreshShortcutConflicts()
     }
 
     private func watchAppActivation() {

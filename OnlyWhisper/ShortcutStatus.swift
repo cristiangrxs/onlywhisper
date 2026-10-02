@@ -45,6 +45,12 @@ enum ShortcutProbe {
         category: "hotkeys"
     )
 
+    /// KeyboardShortcuts' enabled flag is shared mutable state. This file imports it
+    /// as preconcurrency so callers on the main actor can pause shortcuts while recording.
+    static func setEnabled(_ enabled: Bool) {
+        KeyboardShortcuts.isEnabled = enabled
+    }
+
     /// Drops our own Carbon registrations first, so a free shortcut is not reported as taken by us.
     static func conflicts(among names: [KeyboardShortcuts.Name]) -> Set<KeyboardShortcuts.Name> {
         let wasEnabled = KeyboardShortcuts.isEnabled

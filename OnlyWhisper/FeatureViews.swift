@@ -253,18 +253,35 @@ struct FilesView: View {
                 symbol: "doc.text.fill",
                 tint: .teal,
                 title: t("Transcribe files", "Dateien transkribieren"),
-                subtitle: t("Each recording becomes a text file next to the original.", "Jede Aufnahme wird zu einer Textdatei neben dem Original.")
+                subtitle: t("Transcripts are saved in History.", "Transkripte landen im Verlauf.")
             ) {
                 EmptyView()
             }
             Hairline()
             VStack(spacing: DS.spacingM) {
                 dropZone
+                if let modelNotice {
+                    noticeBanner(modelNotice, tint: .orange) {
+                        Button(t("Open Models", "Modelle öffnen")) {
+                            openModels()
+                        }
+                        .controlSize(.small)
+                    }
+                }
+                if let notice = model.files.notice {
+                    noticeBanner(notice, tint: .secondary) { EmptyView() }
+                }
                 if !model.files.jobs.isEmpty {
                     ScrollView {
                         LazyVStack(spacing: 2) {
                             ForEach(model.files.jobs) { job in
-                                FileJobRow(job: job)
+                                FileJobRow(job: job, onRetry: {
+                                    model.retryFile(job.id)
+                                }, onShow: {
+                                    if let id = job.historyID {
+                                        model.showFileTranscript(id)
+                                    }
+                                })
                             }
                         }
                     }
@@ -275,6 +292,10 @@ struct FilesView: View {
             ActionBar {
                 AppBadge(text: summary)
             } trailing: {
+                ActionBarButton(title: t("Clear Finished", "Fertige entfernen")) {
+                    model.clearFinishedFiles()
+                }
+                .disabled(!model.files.hasFinishedJobs)
                 ActionBarButton(title: t("Choose Files…", "Dateien wählen…"), keys: ["⌘", "O"], isPrimary: true) {
                     importing = true
                 }
@@ -289,13 +310,42 @@ struct FilesView: View {
         } isTargeted: { targeted = $0 }
         .fileImporter(
             isPresented: $importing,
-            allowedContentTypes: [.audiovisualContent, .folder],
+            allowedContentTypes: AudioFiles.contentTypes + [.folder],
             allowsMultipleSelection: true
         ) { result in
-            if case .success(let urls) = result {
+            switch result {
+            case .success(let urls):
                 model.enqueueFiles(urls)
+            case .failure(let error):
+                model.noteFileImportFailure(error)
             }
         }
+    }
+
+    private var modelNotice: String? {
+        guard !model.canTranscribeFiles else { return nil }
+        if model.downloads.isRunning {
+            return t("The model is still downloading.", "Das Modell wird noch geladen.")
+        }
+        return t("Install a speech model to transcribe files.", "Installiere ein Sprachmodell, um Dateien zu transkribieren.")
+    }
+
+    private func openModels() {
+        model.showFileModelHelp()
+    }
+
+    private func noticeBanner<Accessory: View>(_ text: String, tint: Color, @ViewBuilder accessory: () -> Accessory) -> some View {
+        HStack(spacing: DS.spacingS) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(tint)
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            accessory()
+        }
+        .padding(DS.spacingM)
+        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.rowRadius, style: .continuous))
     }
 
     private var dropZone: some View {
@@ -325,7 +375,7 @@ struct FilesView: View {
 
     private var summary: String {
         let jobs = model.files.jobs
-        guard !jobs.isEmpty else { return "MP3, M4A, WAV, MP4, MOV …" }
+        guard !jobs.isEmpty else { return AudioFiles.formatSummary }
         let done = jobs.filter { $0.state == .done }.count
         return t("\(done) of \(jobs.count) done", "\(done) von \(jobs.count) fertig")
     }
@@ -333,6 +383,8 @@ struct FilesView: View {
 
 private struct FileJobRow: View {
     var job: FileJob
+    var onRetry: () -> Void
+    var onShow: () -> Void
     @State private var hovering = false
 
     var body: some View {
@@ -348,23 +400,35 @@ private struct FileJobRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
+                if let message = job.state.failureMessage {
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: DS.spacingS)
             status
-            if job.state == .done {
-                Button {
-                    let output = job.url.deletingPathExtension().appendingPathExtension("txt")
-                    NSWorkspace.shared.activateFileViewerSelecting([output])
-                } label: {
-                    Image(systemName: "magnifyingglass")
+            if case .failed = job.state {
+                Button(action: onRetry) {
+                    Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
-                .help(t("Show in Finder", "Im Finder zeigen"))
-                .accessibilityLabel(t("Show in Finder", "Im Finder zeigen"))
+                .help(t("Retry", "Erneut versuchen"))
+                .accessibilityLabel(t("Retry", "Erneut versuchen"))
+            }
+            if job.state == .done, job.historyID != nil {
+                Button(action: onShow) {
+                    Image(systemName: "text.alignleft")
+                }
+                .buttonStyle(.borderless)
+                .help(t("Show in History", "Im Verlauf zeigen"))
+                .accessibilityLabel(t("Show in History", "Im Verlauf zeigen"))
             }
         }
         .padding(.horizontal, DS.spacingS)
-        .frame(height: 44)
+        .padding(.vertical, DS.spacingS)
         .background(
             RoundedRectangle(cornerRadius: DS.rowRadius, style: .continuous)
                 .fill(hovering ? DS.hover : .clear)
@@ -407,6 +471,7 @@ struct HistoryView: View {
     @State private var showsRaw = false
     @State private var showsActions = false
     @State private var actionSelection = 0
+    @State private var applyingFocus = false
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -423,7 +488,7 @@ struct HistoryView: View {
                 EmptyStateView(
                     symbol: query.isEmpty ? "clock" : "magnifyingglass",
                     title: query.isEmpty ? t("Nothing dictated yet", "Noch nichts diktiert") : t("No results", "Keine Ergebnisse"),
-                    message: query.isEmpty ? t("Everything you dictate or rewrite shows up here.", "Alles, was du diktierst oder umschreibst, erscheint hier.") : nil
+                    message: query.isEmpty ? t("Everything you dictate, rewrite, or transcribe from a file shows up here.", "Alles, was du diktierst, umschreibst oder aus einer Datei transkribierst, erscheint hier.") : nil
                 )
             } else {
                 HStack(spacing: 0) {
@@ -451,7 +516,7 @@ struct HistoryView: View {
         }
         .overlay(alignment: .bottomTrailing) {
             if showsActions, let selected {
-                ActionMenu(title: selected.polished.firstLine, actions: actions(for: selected), selection: $actionSelection) { action in
+                ActionMenu(title: selected.listTitle, actions: actions(for: selected), selection: $actionSelection) { action in
                     showsActions = false
                     action.perform()
                 }
@@ -463,10 +528,20 @@ struct HistoryView: View {
         .frame(minWidth: 720, minHeight: 440)
         .glassWindow()
         .onKeyDown { handleKey($0) }
-        .onAppear { searchFocused = true }
+        .onAppear {
+            searchFocused = true
+            revealFocusedEntry()
+        }
+        .onChange(of: model.historyFocus?.token) { _, _ in
+            revealFocusedEntry()
+        }
         .onChange(of: query) {
-            selection = nil
             showsActions = false
+            if applyingFocus {
+                applyingFocus = false
+                return
+            }
+            selection = nil
         }
         .onChange(of: selection) { showsRaw = false }
     }
@@ -475,7 +550,11 @@ struct HistoryView: View {
         let entries = model.history.entries
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return entries }
-        return entries.filter { $0.polished.localizedStandardContains(trimmed) || $0.raw.localizedStandardContains(trimmed) }
+        return entries.filter {
+            $0.polished.localizedStandardContains(trimmed)
+                || $0.raw.localizedStandardContains(trimmed)
+                || ($0.title?.localizedStandardContains(trimmed) ?? false)
+        }
     }
 
     private func list(_ entries: [HistoryEntry], selected: HistoryEntry?) -> some View {
@@ -489,7 +568,8 @@ struct HistoryView: View {
                             PaletteRow(
                                 symbol: style.symbol,
                                 tint: style.tint,
-                                title: entry.polished.firstLine,
+                                title: entry.listTitle,
+                                subtitle: entry.source == "file" ? entry.polished.firstLine : nil,
                                 accessory: entry.date.formatted(date: .omitted, time: .shortened),
                                 isSelected: entry.id == selected?.id
                             )
@@ -541,6 +621,17 @@ struct HistoryView: View {
                 delete(entry)
             },
         ]
+    }
+
+    private func revealFocusedEntry() {
+        guard let id = model.historyFocus?.id else { return }
+        if query.isEmpty {
+            selection = id
+        } else {
+            applyingFocus = true
+            selection = id
+            query = ""
+        }
     }
 
     private func paste(_ entry: HistoryEntry) {
@@ -628,12 +719,18 @@ private struct HistoryDetail: View {
             let style = HistoryStyle(source: entry.source)
             ScrollView {
                 VStack(alignment: .leading, spacing: DS.spacingL) {
+                    if let title = entry.title, !title.isEmpty {
+                        Text(title)
+                            .font(.system(size: 13, weight: .semibold))
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                    }
                     Text(entry.polished)
                         .font(.system(size: 14))
                         .lineSpacing(3)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    if entry.raw != entry.polished, !entry.raw.isEmpty {
+                    if entry.source != "file", entry.raw != entry.polished, !entry.raw.isEmpty {
                         DisclosureGroup(t("Original", "Original"), isExpanded: $showsRaw) {
                             Text(entry.raw)
                                 .font(.system(size: 13))
@@ -650,6 +747,14 @@ private struct HistoryDetail: View {
                             HStack(spacing: 6) {
                                 IconTile(symbol: style.symbol, tint: style.tint, size: 16)
                                 Text(style.title)
+                            }
+                        }
+                        if entry.source == "file", !entry.raw.isEmpty {
+                            metadata(t("File", "Datei")) {
+                                Text(entry.raw)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .help(entry.raw)
                             }
                         }
                         metadata(t("Date", "Datum")) {

@@ -241,7 +241,7 @@ struct ActionBar<Leading: View, Trailing: View>: View {
 
 struct ActionBarButton: View {
     var title: String
-    var keys: [String]
+    var keys: [String] = []
     var isPrimary = false
     var action: () -> Void
     @State private var hovering = false
@@ -252,7 +252,9 @@ struct ActionBarButton: View {
                 Text(title)
                     .font(.system(size: 12, weight: isPrimary ? .semibold : .medium))
                     .foregroundStyle(isPrimary ? .primary : .secondary)
-                KeyCaps(keys: keys)
+                if !keys.isEmpty {
+                    KeyCaps(keys: keys)
+                }
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 4)

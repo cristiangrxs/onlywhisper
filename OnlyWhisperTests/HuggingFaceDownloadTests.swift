@@ -143,8 +143,13 @@ final class HuggingFaceDownloadTests: XCTestCase {
 @MainActor
 final class WhisperCancelCleanupTests: XCTestCase {
     func testCancelDeletesEveryWhisperFileIncludingHiddenOnes() async throws {
-        let manager = ModelDownloadManager()
         let root = ModelPaths.whisper
+        let installed = WhisperModelChoice.isInstalled(
+            downloadBase: root,
+            modelName: ModelPaths.whisperModelName
+        ) && WhisperTokenizerFiles.isInstalled(downloadBase: root)
+        try XCTSkipIf(installed, "Refuses to delete the Whisper model installed on this Mac")
+        let manager = ModelDownloadManager()
         try? FileManager.default.removeItem(at: root)
         defer { try? FileManager.default.removeItem(at: root) }
 

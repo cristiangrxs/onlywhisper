@@ -29,3 +29,13 @@ actor SpeechRouter {
         await whisper.unload()
     }
 }
+
+extension SpeechRouter: FileSpeechTranscribing {
+    func transcribeFile(samples: [Float], language: SpeechChoice) async throws -> String {
+        try await transcribe(samples: samples, choice: language)
+    }
+
+    func unloadFileModel() async {
+        await unload()
+    }
+}

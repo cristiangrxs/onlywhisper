@@ -1,18 +1,32 @@
 import Foundation
 
+struct HistoryFocus: Equatable {
+    var id: HistoryEntry.ID
+    var token = UUID()
+}
+
 struct HistoryEntry: Codable, Identifiable, Equatable, Sendable {
     var id: UUID
     var date: Date
     var source: String
+    /// File name for a transcribed file. Dictation and rewrite leave this empty.
+    var title: String?
     var raw: String
     var polished: String
 
-    init(id: UUID = UUID(), date: Date = .now, source: String, raw: String, polished: String) {
+    init(id: UUID = UUID(), date: Date = .now, source: String, title: String? = nil, raw: String, polished: String) {
         self.id = id
         self.date = date
         self.source = source
+        self.title = title
         self.raw = raw
         self.polished = polished
+    }
+
+    /// Filename for a file transcript, otherwise the first line of the text.
+    var listTitle: String {
+        if let title, !title.isEmpty { return title }
+        return polished.firstLine
     }
 }
 
@@ -33,12 +47,15 @@ final class HistoryStore {
         }
     }
 
-    func add(source: String, raw: String, polished: String) {
-        entries.insert(HistoryEntry(source: source, raw: raw, polished: polished), at: 0)
+    @discardableResult
+    func add(source: String, title: String? = nil, raw: String, polished: String) -> UUID {
+        let entry = HistoryEntry(source: source, title: title, raw: raw, polished: polished)
+        entries.insert(entry, at: 0)
         if entries.count > 200 {
             entries.removeLast(entries.count - 200)
         }
         save()
+        return entry.id
     }
 
     func remove(_ entry: HistoryEntry) {

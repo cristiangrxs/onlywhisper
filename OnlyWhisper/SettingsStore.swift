@@ -1,24 +1,5 @@
 import Foundation
 
-enum DictationKey: String, Codable, CaseIterable, Sendable {
-    case rightOption
-    case leftOption
-
-    var keyCode: Int64 {
-        switch self {
-        case .rightOption: 61
-        case .leftOption: 58
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .rightOption: t("Right Option", "Rechte Option")
-        case .leftOption: t("Left Option", "Linke Option")
-        }
-    }
-}
-
 enum SpeechChoice: String, Codable, CaseIterable, Identifiable, Sendable {
     case automatic
     case german

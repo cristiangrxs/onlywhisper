@@ -363,13 +363,14 @@ private struct DictionarySettings: View {
 
 private struct ShortcutSettings: View {
     @Environment(AppModel.self) private var model
+    @State private var confirmReset = false
 
     var body: some View {
         let _ = model.permissionRevision
         SettingsPage {
             LabeledContent(t("Command palette", "Befehlspalette")) {
                 VStack(alignment: .leading, spacing: 6) {
-                    KeyboardShortcuts.Recorder(for: .commandPalette)
+                    GlobalShortcutRecorder(name: .commandPalette)
                     shortcutStatus(.commandPalette)
                     Text(t("Opens OnlyWhisper from any app.", "Öffnet OnlyWhisper aus jeder App."))
                         .font(.caption)
@@ -378,7 +379,7 @@ private struct ShortcutSettings: View {
             }
             LabeledContent(t("Rewrite selection", "Markierung umschreiben")) {
                 VStack(alignment: .leading, spacing: 6) {
-                    KeyboardShortcuts.Recorder(for: .rewriteSelection)
+                    GlobalShortcutRecorder(name: .rewriteSelection)
                     shortcutStatus(.rewriteSelection)
                     if !model.accessibilityGranted {
                         Text(t(
@@ -394,12 +395,24 @@ private struct ShortcutSettings: View {
                     }
                 }
             }
-            Picker(t("Dictation key", "Diktat-Taste"), selection: Binding(
-                get: { model.settings.dictationKey },
-                set: { model.updateDictationKey($0) }
-            )) {
-                ForEach(DictationKey.allCases, id: \.self) { key in
-                    Text(key.title).tag(key)
+            LabeledContent(t("Dictation key", "Diktat-Taste")) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ShortcutRecorder(
+                        mode: .dictation,
+                        keys: model.settings.dictationKey.keycaps,
+                        allowsClear: false,
+                        onCommit: { model.updateDictationKey($0) }
+                    )
+                    if dictationOverlapsShortcut {
+                        overlapNote
+                    }
+                    Text(t(
+                        "Hold a modifier, or a modifier and a key. A bare letter is ignored.",
+                        "Eine Sondertaste halten, oder eine Sondertaste und eine Taste. Ein einzelner Buchstabe gilt nicht."
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
             LabeledContent(t("Status", "Status")) {
@@ -412,8 +425,8 @@ private struct ShortcutSettings: View {
                             tint: .orange
                         )
                         Text(t(
-                            "OnlyWhisper needs this to hear the Option key in other apps.",
-                            "OnlyWhisper braucht das, um die Option-Taste in anderen Apps zu hören."
+                            "OnlyWhisper needs this to hear the dictation key in other apps.",
+                            "OnlyWhisper braucht das, um die Diktat-Taste in anderen Apps zu hören."
                         ))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -426,13 +439,32 @@ private struct ShortcutSettings: View {
             }
             LabeledContent(t("How it works", "So geht’s")) {
                 VStack(alignment: .leading, spacing: DS.spacingS) {
-                    ShortcutHint(label: t("Hold to dictate", "Halten zum Diktieren"), keys: [holdKey])
-                    ShortcutHint(label: t("Tap for hands-free", "Tippen für Freisprechen"), keys: [holdKey])
+                    ShortcutHint(label: t("Hold to dictate", "Halten zum Diktieren"), keys: model.settings.dictationKey.keycaps)
+                    ShortcutHint(label: t("Tap for hands-free", "Tippen für Freisprechen"), keys: model.settings.dictationKey.keycaps)
                     ShortcutHint(label: t("Cancel", "Abbrechen"), keys: ["esc"])
                 }
                 .font(.callout)
-                .frame(maxWidth: 260)
             }
+            LabeledContent(t("Defaults", "Standardwerte")) {
+                Button(t("Reset all", "Alle zurücksetzen")) {
+                    confirmReset = true
+                }
+            }
+        }
+        .confirmationDialog(
+            t("Reset all shortcuts?", "Alle Kurzbefehle zurücksetzen?"),
+            isPresented: $confirmReset,
+            titleVisibility: .visible
+        ) {
+            Button(t("Reset", "Zurücksetzen"), role: .destructive) {
+                model.resetShortcuts()
+            }
+            Button(t("Cancel", "Abbrechen"), role: .cancel) {}
+        } message: {
+            Text(t(
+                "Command palette, rewrite, and the dictation key return to their defaults.",
+                "Befehlspalette, Umschreiben und die Diktat-Taste werden auf die Standardwerte gesetzt."
+            ))
         }
     }
 
@@ -448,16 +480,31 @@ private struct ShortcutSettings: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        } else if overlapsDictation(name) {
+            overlapNote
         } else {
             StatusBadge(title: t("Ready", "Bereit"), tint: .green)
         }
     }
 
-    private var holdKey: String {
-        switch model.settings.dictationKey {
-        case .rightOption: t("Right ⌥", "Rechts ⌥")
-        case .leftOption: t("Left ⌥", "Links ⌥")
+    private var overlapNote: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            StatusBadge(title: t("Same as another shortcut", "Gleich wie ein anderer Kurzbefehl"), tint: .orange)
+            Text(t("Choose different keys.", "Bitte andere Tasten wählen."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
+    }
+
+    private var dictationOverlapsShortcut: Bool {
+        let _ = model.shortcutRevision
+        return overlapsDictation(.commandPalette) || overlapsDictation(.rewriteSelection)
+    }
+
+    private func overlapsDictation(_ name: KeyboardShortcuts.Name) -> Bool {
+        guard case .chord(let keyCode, let carbonModifiers, _) = model.settings.dictationKey else { return false }
+        guard let shortcut = KeyboardShortcuts.getShortcut(for: name) else { return false }
+        return shortcut.carbonKeyCode == keyCode && shortcut.carbonModifiers == carbonModifiers
     }
 }
 

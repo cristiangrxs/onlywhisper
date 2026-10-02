@@ -1,96 +1,75 @@
 import CoreGraphics
 import Foundation
-import IOKit.hidsystem
 import os
-
-/// Press and release edges for one Option key.
-///
-/// `flagsChanged` does not reliably carry a keycode, and `.maskAlternate` is set for
-/// both Option keys. The side comes from the device-dependent bits. Keyboards that
-/// omit those bits fall back to the keycode plus `.maskAlternate`.
-struct DictationKeyEdge: Sendable {
-    enum Change: Equatable, Sendable {
-        case pressed
-        case released
-    }
-
-    var keyCode: Int64
-    private(set) var isDown = false
-
-    init(keyCode: Int64 = DictationKey.rightOption.keyCode) {
-        self.keyCode = keyCode
-    }
-
-    mutating func reset() {
-        isDown = false
-    }
-
-    mutating func handle(flags: UInt64, eventKeyCode: Int64) -> Change? {
-        let down = Self.isDown(targetKeyCode: keyCode, flags: flags, eventKeyCode: eventKeyCode)
-        guard down != isDown else { return nil }
-        isDown = down
-        return down ? .pressed : .released
-    }
-
-    /// Corrects a missed key-up. A key that is already held does not count as a new press.
-    mutating func reconcile(flags: UInt64) -> Change? {
-        let down = Self.isDown(targetKeyCode: keyCode, flags: flags, eventKeyCode: 0)
-        guard isDown, !down else { return nil }
-        isDown = false
-        return .released
-    }
-
-    static func isDown(targetKeyCode: Int64, flags: UInt64, eventKeyCode: Int64) -> Bool {
-        let right = flags & UInt64(NX_DEVICERALTKEYMASK) != 0
-        let left = flags & UInt64(NX_DEVICELALTKEYMASK) != 0
-        switch targetKeyCode {
-        case DictationKey.rightOption.keyCode where right || left:
-            return right
-        case DictationKey.leftOption.keyCode where right || left:
-            return left
-        default:
-            break
-        }
-        let alternate = flags & CGEventFlags.maskAlternate.rawValue != 0
-        return alternate && eventKeyCode == targetKeyCode
-    }
-}
 
 private let hotkeyLog = Logger(
     subsystem: Bundle.main.bundleIdentifier ?? "app.onlywhisper.mac",
     category: "hotkeys"
 )
 
+private struct TapState: Sendable {
+    var press = DictationPress()
+    var paused = false
+    var canSwallow = false
+}
+
+private struct TapDecision: Sendable {
+    var change: DictationPress.Change?
+    var swallow = false
+    var escape = false
+}
+
+/// Hears the dictation binding in other apps.
+///
+/// Modifier-only bindings stay visible to the system. A chord's key is swallowed so it is not typed.
 @MainActor
 final class HotkeyMonitor {
     var onPress: (() -> Void)?
     var onRelease: ((TimeInterval) -> Void)?
     var onEscape: (() -> Void)?
 
-    var keyCode: Int64 {
-        get { edge.keyCode }
+    var binding: DictationKey {
+        get { gate.withLock { $0.press.binding } }
         set {
-            guard edge.keyCode != newValue else { return }
-            if edge.isDown {
-                edge.reset()
-                deliverRelease()
+            let shouldRelease = gate.withLock { state -> Bool in
+                guard state.press.binding != newValue else { return false }
+                let down = state.press.isDown
+                state.press.binding = newValue
+                if down { state.press.reset() }
+                return down
             }
-            edge.keyCode = newValue
+            if shouldRelease { deliverRelease() }
+        }
+    }
+
+    var isPaused: Bool {
+        get { gate.withLock { $0.paused } }
+        set {
+            let shouldRelease = gate.withLock { state -> Bool in
+                state.paused = newValue
+                guard newValue, state.press.isDown else { return false }
+                state.press.reset()
+                return true
+            }
+            if shouldRelease { deliverRelease() }
         }
     }
 
     private(set) var isListening = false
-    private var edge = DictationKeyEdge()
+    nonisolated private let gate = OSAllocatedUnfairLock(initialState: TapState())
     private var pressedAt: Date?
     nonisolated(unsafe) private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
-    /// Creates a listen-only tap. Returns false until Input Monitoring is granted, so a
-    /// failed tap is not left installed for the rest of the process.
-    func start() -> Bool {
+    /// Creates the event tap. Returns false until Input Monitoring is granted.
+    /// When `canFilter` is true, a filtering tap is used so chord keys are not typed.
+    func start(canFilter: Bool) -> Bool {
         if let tap, CGEvent.tapIsEnabled(tap: tap) {
-            isListening = true
-            return true
+            let swallowing = gate.withLock { $0.canSwallow }
+            if swallowing || !canFilter {
+                isListening = true
+                return true
+            }
         }
         reconcileWithSystem()
         stop()
@@ -98,34 +77,10 @@ final class HotkeyMonitor {
             hotkeyLog.error("Event tap not started: Input Monitoring is not granted")
             return false
         }
-
-        let mask = (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.keyDown.rawValue)
-        let callback: CGEventTapCallBack = { _, type, event, userInfo in
-            guard let userInfo else { return Unmanaged.passUnretained(event) }
-            let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(userInfo).takeUnretainedValue()
-            monitor.handle(type: type, event: event)
-            return Unmanaged.passUnretained(event)
+        if canFilter, install(options: .defaultTap, canSwallow: true) {
+            return true
         }
-        guard let created = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .listenOnly,
-            eventsOfInterest: CGEventMask(mask),
-            callback: callback,
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
-        ) else {
-            hotkeyLog.error("Event tap was rejected")
-            return false
-        }
-        tap = created
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, created, 0)
-        runLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: created, enable: true)
-        isListening = true
-        hotkeyLog.info("Event tap started")
-        reconcileWithSystem()
-        return true
+        return install(options: .listenOnly, canSwallow: false)
     }
 
     func stop() {
@@ -138,9 +93,43 @@ final class HotkeyMonitor {
         tap = nil
         runLoopSource = nil
         isListening = false
+        gate.withLock { $0.canSwallow = false }
     }
 
-    nonisolated fileprivate func handle(type: CGEventType, event: CGEvent) {
+    private func install(options: CGEventTapOptions, canSwallow: Bool) -> Bool {
+        let mask = (1 << CGEventType.flagsChanged.rawValue)
+            | (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.keyUp.rawValue)
+        let callback: CGEventTapCallBack = { _, type, event, userInfo in
+            guard let userInfo else { return Unmanaged.passUnretained(event) }
+            let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+            let swallow = monitor.handle(type: type, event: event)
+            return swallow ? nil : Unmanaged.passUnretained(event)
+        }
+        guard let created = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: options,
+            eventsOfInterest: CGEventMask(mask),
+            callback: callback,
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            hotkeyLog.error("Event tap was rejected")
+            return false
+        }
+        gate.withLock { $0.canSwallow = canSwallow }
+        tap = created
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, created, 0)
+        runLoopSource = source
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: created, enable: true)
+        isListening = true
+        hotkeyLog.info("Event tap started")
+        reconcileWithSystem()
+        return true
+    }
+
+    nonisolated fileprivate func handle(type: CGEventType, event: CGEvent) -> Bool {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             hotkeyLog.error("Event tap disabled by the system, re-enabling")
             if let tap {
@@ -149,28 +138,48 @@ final class HotkeyMonitor {
             Task { @MainActor in
                 self.reconcileWithSystem()
             }
-            return
+            return false
         }
         let code = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags.rawValue
-        let isEscape = type == .keyDown && code == 53
-        let isFlags = type == .flagsChanged
-        Task { @MainActor in
-            if isEscape {
-                self.onEscape?()
-                return
-            }
-            guard isFlags else { return }
-            self.apply(self.edge.handle(flags: flags, eventKeyCode: code))
+        let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        let kind: DictationPress.Event = switch type {
+        case .keyDown: .keyDown
+        case .keyUp: .keyUp
+        default: .flagsChanged
         }
+        let decision = gate.withLock { state -> TapDecision in
+            if state.paused { return TapDecision() }
+            if type == .keyDown, code == 53 {
+                return TapDecision(escape: true)
+            }
+            let step = state.press.handle(event: kind, flags: flags, eventKeyCode: code, isRepeat: isRepeat)
+            return TapDecision(change: step.change, swallow: step.swallow && state.canSwallow)
+        }
+        if decision.escape {
+            Task { @MainActor in
+                self.onEscape?()
+            }
+            return false
+        }
+        if let change = decision.change {
+            Task { @MainActor in
+                self.apply(change)
+            }
+        }
+        return decision.swallow
     }
 
     private func reconcileWithSystem() {
         let flags = CGEventSource.flagsState(.combinedSessionState).rawValue
-        apply(edge.reconcile(flags: flags))
+        let change = gate.withLock { state -> DictationPress.Change? in
+            guard !state.paused else { return nil }
+            return state.press.reconcile(flags: flags)
+        }
+        apply(change)
     }
 
-    private func apply(_ change: DictationKeyEdge.Change?) {
+    private func apply(_ change: DictationPress.Change?) {
         switch change {
         case .pressed:
             pressedAt = .now
