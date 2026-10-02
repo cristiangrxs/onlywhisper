@@ -269,7 +269,7 @@
 			buildSettings = {
 				ARCHS = arm64;
 				CODE_SIGN_ENTITLEMENTS = OnlyWhisper/OnlyWhisper.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development: Aurel-Cristian Grosu (745CGQ3937)";
+				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 8;
@@ -325,7 +325,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_IDENTITY = "Apple Development: Aurel-Cristian Grosu (745CGQ3937)";
+				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 27.0;

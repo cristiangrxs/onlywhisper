@@ -1,0 +1,16 @@
+name: Feature request
+description: An idea for OnlyWhisper
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What should OnlyWhisper do?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why does it matter?
+    validations:
+      required: false
