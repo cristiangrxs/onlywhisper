@@ -18,7 +18,6 @@
 #   NOTARY_PROFILE   onlywhisper
 #
 # Optional environment:
-#   RELEASES_REPO    Public GitHub repo for release assets (default: cristiangrxs/onlywhisper-releases)
 #   SPARKLE_BIN      Directory containing Sparkle's sign_update tool (auto-detected from DerivedData)
 #
 # --bump-patch requires a clean main branch that matches origin/main.
@@ -40,7 +39,6 @@ PROJECT="OnlyWhisper.xcodeproj"
 SCHEME="OnlyWhisper"
 APP_NAME="OnlyWhisper"
 PBX="$ROOT/OnlyWhisper.xcodeproj/project.pbxproj"
-RELEASES_REPO="${RELEASES_REPO:-cristiangrxs/onlywhisper-releases}"
 BUILD_DIR="$ROOT/build/release"
 DERIVED_DATA="$ROOT/DerivedData"
 DEVELOPER_ID="${DEVELOPER_ID:-Developer ID Application: Aurel-Cristian Grosu (65QU3X8PHA)}"
@@ -142,8 +140,8 @@ if [[ $SKIP_SIGN -eq 0 ]]; then
 fi
 echo "Version $VERSION (build $BUILD)"
 
-if gh release view "$TAG" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
-  fail "Release $TAG already exists in $RELEASES_REPO. Bump the version first."
+if gh release view "$TAG" >/dev/null 2>&1; then
+  fail "Release $TAG already exists. Bump the version first."
 fi
 
 rm -rf "$BUILD_DIR"
@@ -259,7 +257,7 @@ if [[ $SKIP_SIGN -eq 0 ]]; then
   [[ -n "$ED_SIGNATURE" && -n "$LENGTH" ]] || fail "Could not parse sign_update output: $SIGNATURE_LINE"
 fi
 
-step "Publishing $TAG to $RELEASES_REPO"
+step "Publishing $TAG"
 NOTES="$BUILD_DIR/notes.md"
 if [[ -n "$NOTES_FILE" ]]; then
   cp "$NOTES_FILE" "$NOTES"
@@ -273,7 +271,6 @@ elif [[ -n "${ED_SIGNATURE:-}" ]]; then
 fi
 
 gh release create "$TAG" "$DMG" \
-  --repo "$RELEASES_REPO" \
   --title "$APP_NAME $VERSION" \
   --notes-file "$NOTES" \
   $DRAFT_FLAG
