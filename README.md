@@ -21,7 +21,7 @@ Speech recognition is Whisper Large v3, on device. The first launch downloads th
 
 ## Install
 
-Download the signed disk image from [onlywhisper-releases](https://github.com/cristiangrxs/onlywhisper-releases/releases/latest).
+Download the signed disk image from the [latest release](https://github.com/cristiangrxs/onlywhisper/releases/latest).
 
 You need an Apple silicon Mac on macOS 27. The app asks for the microphone, Accessibility, and Input Monitoring.
 
