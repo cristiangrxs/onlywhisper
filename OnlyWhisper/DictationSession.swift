@@ -83,12 +83,11 @@ enum SpeechPause {
     private static let frame = sampleRate / 10
     private static let pauseFrames = 6
     private static let minSegment = sampleRate
-    private static let maxSegment = 8 * sampleRate
     private static let searchWindow = 3 * sampleRate
 
     /// The sample index to settle at, or nil while the segment should stay open.
     /// A trailing pause settles everything. A segment past the length cap settles at its quietest recent frame.
-    static func settlePoint(in samples: [Float], from start: Int, to end: Int) -> Int? {
+    static func settlePoint(in samples: [Float], from start: Int, to end: Int, maxSegment: Int = 8 * sampleRate) -> Int? {
         let length = end - start
         guard length >= minSegment else { return nil }
         let energies = frameEnergies(samples, from: start, to: end)
@@ -153,6 +152,24 @@ enum SpeechPresence {
             loudest = max(loudest, rms(samples, from: index, count: remainder))
         }
         return loudest >= quietSpeechLevel
+    }
+
+    /// First and last loud sample in the range, so a pause before the next phrase stays a gap.
+    static func speechBounds(in samples: [Float], from start: Int, to end: Int) -> (start: Int, end: Int)? {
+        guard end > start else { return nil }
+        var first: Int?
+        var last = start
+        var index = start
+        while index < end {
+            let count = min(frame, end - index)
+            if rms(samples, from: index, count: count) >= quietSpeechLevel {
+                if first == nil { first = index }
+                last = index + count
+            }
+            index += count
+        }
+        guard let first, last > first else { return nil }
+        return (first, last)
     }
 
     private static func rms(_ samples: [Float], from start: Int, count: Int) -> Float {

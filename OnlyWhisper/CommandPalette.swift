@@ -261,7 +261,14 @@ struct CommandPaletteView: View {
         case .working(let text): return text
         case .idle: break
         }
-        if model.meetingActive { return t("Meeting is recording", "Meeting wird aufgenommen") }
+        if model.meetingActive {
+            return model.meetingPaused
+                ? t("Meeting is paused", "Meeting pausiert")
+                : t("Meeting is recording", "Meeting wird aufgenommen")
+        }
+        if let call = model.detectedMeeting {
+            return t("\(call.kind.localizedName) call", "\(call.kind.localizedName)-Anruf")
+        }
         if !model.statusMessage.isEmpty { return model.statusMessage }
         if showsHotkeyWarning {
             return t("Allow Input Monitoring to dictate", "Eingabeüberwachung fürs Diktat erlauben")
@@ -372,7 +379,7 @@ struct CommandPaletteView: View {
             dismiss()
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(60))
-                if let window, window.isVisible {
+                if let window, window.isVisible, window.identifier?.rawValue.hasPrefix("meeting") != true {
                     window.orderOut(nil)
                 }
             }
@@ -429,7 +436,9 @@ struct CommandPaletteView: View {
             result.append(PaletteCommand(
                 id: "meeting.live",
                 section: .now,
-                title: t("Meeting is recording", "Meeting läuft"),
+                title: model.meetingPaused
+                    ? t("Meeting is paused", "Meeting pausiert")
+                    : t("Meeting is recording", "Meeting läuft"),
                 symbol: "record.circle",
                 tint: .red,
                 keywords: ["meeting", "stop"],
@@ -441,6 +450,19 @@ struct CommandPaletteView: View {
                         Task { await model.stopMeeting() }
                     },
                 ]
+            ))
+        } else if let call = model.detectedMeeting {
+            result.append(PaletteCommand(
+                id: "meeting.detected",
+                section: .now,
+                title: t("\(call.kind.localizedName) call", "\(call.kind.localizedName)-Anruf"),
+                subtitle: t("Open the meeting window", "Meeting-Fenster öffnen"),
+                symbol: "person.2.wave.2.fill",
+                tint: .orange,
+                keywords: ["meeting", "call", call.kind.localizedName.lowercased()],
+                actions: [MenuAction(id: "meeting.detected.open", title: t("Show Meeting", "Meeting zeigen"), symbol: "arrow.up.forward.app") {
+                    model.open("meeting")
+                }]
             ))
         }
 
@@ -496,7 +518,7 @@ struct CommandPaletteView: View {
             subtitle: t("Transcript with speakers", "Transkript mit Sprechern"),
             symbol: "person.2.wave.2.fill",
             tint: .orange,
-            accessory: model.meetingActive ? t("Recording", "Läuft") : nil,
+            accessory: model.meetingActive ? t("Recording", "Läuft") : model.detectedMeeting?.kind.localizedName,
             keywords: ["meeting", "call", "transcript", "notes", "protokoll", "besprechung"],
             actions: [MenuAction(id: "meeting.open", title: t("Open Meeting", "Meeting öffnen"), symbol: "arrow.up.forward.app") {
                 model.open("meeting")

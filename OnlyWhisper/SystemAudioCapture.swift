@@ -2,15 +2,63 @@ import CoreMedia
 import Foundation
 import ScreenCaptureKit
 
+enum SystemAudioCaptureError: Error {
+    case appNotShareable
+}
+
 final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private var stream: SCStream?
     private let queue = DispatchQueue(label: "app.onlywhisper.system-audio")
-    var onSamples: (@Sendable ([Float]) -> Void)?
+    private let buffer = SampleBuffer()
+    private var bundleIDs: [String] = []
+    private var started = false
+    /// True when a requested app was missing from the shareable list. The whole mix is never used in that case.
+    private(set) var fellBackToFullMix = false
 
-    func start() async throws {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+    /// Records only the given apps. An empty list, or apps ScreenCaptureKit cannot see, throws instead of recording every app.
+    func start(including bundleIDs: [String]) async throws {
+        self.bundleIDs = bundleIDs
+        buffer.reset()
+        started = true
+        fellBackToFullMix = false
+        try await openStream()
+    }
+
+    func pause() {
+        guard started else { return }
+        buffer.setAccepting(false)
+        stopStream()
+    }
+
+    func resume() async throws {
+        guard started, stream == nil else { return }
+        buffer.setAccepting(true)
+        try await openStream()
+    }
+
+    func snapshot() -> [Float] {
+        buffer.snapshot()
+    }
+
+    @discardableResult
+    func stop() -> [Float] {
+        started = false
+        bundleIDs = []
+        stopStream()
+        return buffer.take()
+    }
+
+    private func openStream() async throws {
+        stopStream()
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         guard let display = content.displays.first else { throw CocoaError(.fileReadNoSuchFile) }
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let matches = content.applications.filter { bundleIDs.contains($0.bundleIdentifier) }
+        guard !bundleIDs.isEmpty, !matches.isEmpty else {
+            fellBackToFullMix = false
+            throw SystemAudioCaptureError.appNotShareable
+        }
+        let filter = SCContentFilter(display: display, including: matches, exceptingWindows: [])
+        fellBackToFullMix = false
         let configuration = SCStreamConfiguration()
         configuration.capturesAudio = true
         configuration.excludesCurrentProcessAudio = true
@@ -22,7 +70,7 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unc
         self.stream = stream
     }
 
-    func stop() {
+    private func stopStream() {
         let stream = stream
         self.stream = nil
         stream?.stopCapture()
@@ -30,7 +78,7 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unc
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio, let samples = Self.floats(from: sampleBuffer) else { return }
-        onSamples?(samples)
+        buffer.append(samples)
     }
 
     private static func floats(from sampleBuffer: CMSampleBuffer) -> [Float]? {

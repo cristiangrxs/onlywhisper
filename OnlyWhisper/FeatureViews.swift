@@ -40,206 +40,6 @@ private struct Hairline: View {
     }
 }
 
-// MARK: - Meeting
-
-struct MeetingView: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        VStack(spacing: 0) {
-            WindowHeader(
-                symbol: "person.2.wave.2.fill",
-                tint: .orange,
-                title: t("Meeting", "Meeting"),
-                subtitle: model.meetingStatus.isEmpty ? t("Transcript with speakers, on this Mac", "Transkript mit Sprechern, auf diesem Mac") : model.meetingStatus
-            ) {
-                if model.meetingActive, let start = model.meetingStartedAt {
-                    RecordingPill(start: start)
-                }
-                Button {
-                    toggleRecording()
-                } label: {
-                    Label(
-                        model.meetingActive ? t("Stop", "Stopp") : t("Record", "Aufnehmen"),
-                        systemImage: model.meetingActive ? "stop.fill" : "record.circle"
-                    )
-                }
-                .buttonStyle(.glassProminent)
-                .tint(model.meetingActive ? .red : .accentColor)
-                .keyboardShortcut(.return, modifiers: .command)
-            }
-            Hairline()
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: DS.spacingL) {
-                    ForEach(model.meetingChunks) { chunk in
-                        TranscriptRow(chunk: chunk)
-                    }
-                    if let notes = model.meetingNotes {
-                        NotesCards(notes: notes)
-                            .padding(.top, DS.spacingS)
-                    }
-                }
-                .padding(DS.spacingXL)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .overlay {
-                if model.meetingChunks.isEmpty, model.meetingNotes == nil {
-                    EmptyStateView(
-                        symbol: "waveform",
-                        title: model.meetingActive ? t("Listening…", "Hört zu…") : t("No transcript yet", "Noch kein Transkript"),
-                        message: model.meetingActive
-                            ? t("Text appears every few seconds.", "Text erscheint alle paar Sekunden.")
-                            : t("Press Record to start. Speakers are labeled when you stop.", "Drücke Aufnehmen. Sprecher werden beim Stoppen zugeordnet.")
-                    )
-                }
-            }
-            ActionBar {
-                AppBadge(text: t("\(model.meetingChunks.count) segments", "\(model.meetingChunks.count) Abschnitte"))
-            } trailing: {
-                ActionBarButton(title: t("Copy Transcript", "Transkript kopieren"), keys: ["⇧", "⌘", "C"]) {
-                    model.copy(transcript)
-                }
-                .keyboardShortcut("c", modifiers: [.command, .shift])
-                .disabled(model.meetingChunks.isEmpty)
-                ActionBarDivider()
-                ActionBarButton(
-                    title: model.meetingActive ? t("Stop", "Stopp") : t("Record", "Aufnehmen"),
-                    keys: ["⌘", "↵"],
-                    isPrimary: true,
-                    action: toggleRecording
-                )
-            }
-        }
-        .frame(minWidth: 560, minHeight: 420)
-        .glassWindow()
-    }
-
-    private var transcript: String {
-        var lines = model.meetingChunks.map { chunk in
-            (chunk.speaker.map { "\($0): " } ?? "") + chunk.text
-        }
-        if let notes = model.meetingNotes {
-            lines.append("")
-            lines.append(notes.summary)
-            lines.append(contentsOf: notes.decisions.map { "- \($0)" })
-            lines.append(contentsOf: notes.tasks.map { "[ ] \($0)" })
-        }
-        return lines.joined(separator: "\n")
-    }
-
-    private func toggleRecording() {
-        if model.meetingActive {
-            Task { await model.stopMeeting() }
-        } else {
-            Task { await model.startMeeting() }
-        }
-    }
-}
-
-private struct RecordingPill: View {
-    var start: Date
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        TimelineView(.periodic(from: start, by: 1)) { context in
-            HStack(spacing: 6) {
-                Image(systemName: "circle.fill")
-                    .font(.system(size: 8))
-                    .foregroundStyle(.red)
-                    .symbolEffect(.pulse, isActive: !reduceMotion)
-                Text(Duration.seconds(max(0, context.date.timeIntervalSince(start))).formatted(.time(pattern: .minuteSecond)))
-                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(Color.red.opacity(0.12), in: Capsule())
-        }
-        .accessibilityLabel(t("Recording", "Aufnahme läuft"))
-    }
-}
-
-private struct TranscriptRow: View {
-    var chunk: TranscriptChunk
-
-    var body: some View {
-        HStack(alignment: .top, spacing: DS.spacingM) {
-            SpeakerAvatar(name: chunk.speaker)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: DS.spacingS) {
-                    Text(chunk.speaker ?? t("Speaker", "Sprecher"))
-                        .font(.system(size: 12, weight: .semibold))
-                    Text(Duration.seconds(chunk.start).formatted(.time(pattern: .minuteSecond)))
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                }
-                Text(chunk.text)
-                    .font(.system(size: 13))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-}
-
-private struct SpeakerAvatar: View {
-    var name: String?
-    private static let tints: [Color] = [.blue, .orange, .green, .pink, .purple, .teal, .indigo]
-
-    var body: some View {
-        let letter = name?.trimmingCharacters(in: .whitespaces).first.map { String($0).uppercased() } ?? "?"
-        Text(letter)
-            .font(.system(size: 12, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 26, height: 26)
-            .background(tint.gradient, in: Circle())
-            .accessibilityHidden(true)
-    }
-
-    private var tint: Color {
-        guard let name else { return .gray }
-        let seed = name.unicodeScalars.reduce(0) { $0 + Int($1.value) }
-        return Self.tints[seed % Self.tints.count]
-    }
-}
-
-private struct NotesCards: View {
-    var notes: MeetingNotes
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DS.spacingM) {
-            VStack(alignment: .leading, spacing: DS.spacingS) {
-                Label(t("Summary", "Zusammenfassung"), systemImage: "text.quote")
-                    .font(.headline)
-                Text(notes.summary)
-                    .textSelection(.enabled)
-            }
-            .card()
-            if !notes.decisions.isEmpty {
-                list(t("Decisions", "Entscheidungen"), symbol: "checkmark.seal", bullet: "arrow.right", items: notes.decisions)
-            }
-            if !notes.tasks.isEmpty {
-                list(t("Tasks", "Aufgaben"), symbol: "checklist", bullet: "circle", items: notes.tasks)
-            }
-        }
-    }
-
-    private func list(_ title: String, symbol: String, bullet: String, items: [String]) -> some View {
-        VStack(alignment: .leading, spacing: DS.spacingS) {
-            Label(title, systemImage: symbol)
-                .font(.headline)
-            ForEach(items, id: \.self) { item in
-                HStack(alignment: .firstTextBaseline, spacing: DS.spacingS) {
-                    Image(systemName: bullet)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(item).textSelection(.enabled)
-                }
-            }
-        }
-        .card()
-    }
-}
-
 // MARK: - Files
 
 struct FilesView: View {
@@ -725,12 +525,22 @@ private struct HistoryDetail: View {
                             .lineLimit(2)
                             .truncationMode(.middle)
                     }
-                    Text(entry.polished)
-                        .font(.system(size: 14))
-                        .lineSpacing(3)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if entry.source != "file", entry.raw != entry.polished, !entry.raw.isEmpty {
+                    if let meeting = entry.meeting {
+                        MeetingChatList(
+                            turns: meeting.turns,
+                            names: meeting.names,
+                            separatesLocalVoice: meeting.separatesLocalVoice,
+                            notes: meeting.notes,
+                            scrolls: false
+                        )
+                    } else {
+                        Text(entry.polished)
+                            .font(.system(size: 14))
+                            .lineSpacing(3)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    if entry.meeting == nil, entry.source != "file", entry.raw != entry.polished, !entry.raw.isEmpty {
                         DisclosureGroup(t("Original", "Original"), isExpanded: $showsRaw) {
                             Text(entry.raw)
                                 .font(.system(size: 13))

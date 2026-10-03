@@ -34,13 +34,6 @@ struct OnlyWhisperApp: App {
         .windowBackgroundDragBehavior(.enabled)
         .defaultPosition(.center)
 
-        Window(t("Meeting", "Meeting"), id: "meeting") {
-            MeetingView().environment(model)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .windowBackgroundDragBehavior(.enabled)
-        .defaultSize(width: 680, height: 560)
-
         Window(t("Files", "Dateien"), id: "files") {
             FilesView().environment(model)
         }
@@ -62,5 +55,13 @@ struct OnlyWhisperApp: App {
         .windowResizability(.contentSize)
         .windowBackgroundDragBehavior(.enabled)
         .defaultPosition(.center)
+
+        Window(t("Meeting", "Meeting"), id: "meeting") {
+            MeetingView().environment(model)
+        }
+        .defaultLaunchBehavior(.suppressed)
+        .windowStyle(.hiddenTitleBar)
+        .windowBackgroundDragBehavior(.enabled)
+        .defaultSize(width: 400, height: 560)
     }
 }
