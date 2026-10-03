@@ -1,5 +1,7 @@
 # OnlyWhisper
 
+[onlywhisper.dev](https://onlywhisper.dev)
+
 Dictation for the Mac menu bar. Audio stays on the Mac.
 
 Hold the right Option key, speak, and the text lands in the field you are using. A tap of the same key dictates hands-free.
