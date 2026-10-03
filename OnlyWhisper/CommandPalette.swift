@@ -6,7 +6,9 @@ enum PaletteSection: Int, CaseIterable, Sendable {
     case now
     case dictation
     case transcribe
-    case recent
+    case transcribed
+    case meeting
+    case rewrite
     case app
 
     var title: String {
@@ -14,8 +16,20 @@ enum PaletteSection: Int, CaseIterable, Sendable {
         case .now: t("Now", "Aktuell")
         case .dictation: t("Dictation", "Diktat")
         case .transcribe: t("Transcribe", "Transkribieren")
-        case .recent: t("Recent", "Zuletzt")
+        case .transcribed: t("Transcribed", "Transkribiert")
+        case .meeting: t("Meeting", "Meeting")
+        case .rewrite: t("Rewrite", "Umschreiben")
         case .app: "OnlyWhisper"
+        }
+    }
+
+    /// Past transcripts use the category that names their source.
+    static func transcript(_ source: String) -> PaletteSection {
+        switch source {
+        case "file": .transcribed
+        case "meeting": .meeting
+        case "rewrite": .rewrite
+        default: .dictation
         }
     }
 }
@@ -32,6 +46,8 @@ struct PaletteCommand: Identifiable {
     var keys: [String] = []
     var keywords: [String] = []
     var isEnabled = true
+    /// Past transcripts stay out of the list until a search matches them.
+    var isTranscript = false
     /// The first action is the primary one (Return). All of them appear in the Cmd+K menu.
     var actions: [MenuAction] = []
 }
@@ -64,7 +80,9 @@ enum PaletteSearch {
     }
 
     static func filter(_ commands: [PaletteCommand], query: String) -> [PaletteCommand] {
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return commands }
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return commands.filter { !$0.isTranscript }
+        }
         var matches: [(index: Int, command: PaletteCommand, score: Int)] = []
         for (index, command) in commands.enumerated() {
             if let score = score(title: command.title, keywords: command.keywords, query: query) {
@@ -72,7 +90,13 @@ enum PaletteSearch {
             }
         }
         matches.sort { left, right in
-            left.score == right.score ? left.index < right.index : left.score > right.score
+            if left.command.section != right.command.section {
+                return left.command.section.rawValue < right.command.section.rawValue
+            }
+            if left.score != right.score {
+                return left.score > right.score
+            }
+            return left.index < right.index
         }
         return matches.map(\.command)
     }
@@ -86,22 +110,8 @@ enum PaletteSearch {
     }
 }
 
-enum PaletteContext {
-    case floating
-    case menuBar
-
-    var size: CGSize {
-        switch self {
-        case .floating: CGSize(width: DS.panelWidth, height: DS.panelHeight)
-        case .menuBar: CGSize(width: 420, height: 460)
-        }
-    }
-}
-
 struct CommandPaletteView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    var context: PaletteContext
     var onClose: () -> Void = {}
 
     @State private var query = ""
@@ -118,13 +128,13 @@ struct CommandPaletteView: View {
                 placeholder: t("Search commands and history…", "Befehle und Verlauf durchsuchen…"),
                 text: $query,
                 focus: $searchFocused,
-                fontSize: context == .floating ? 18 : 15
+                fontSize: 18
             )
             Rectangle().fill(DS.hairline).frame(height: 1)
             results(visible)
             actionBar(selected)
         }
-        .frame(width: context.size.width, height: context.size.height)
+        .frame(width: DS.panelWidth, height: DS.panelHeight)
         .overlay(alignment: .bottomTrailing) {
             if showsActions, let selected, !selected.actions.isEmpty {
                 ActionMenu(
@@ -139,7 +149,7 @@ struct CommandPaletteView: View {
             }
         }
         .animation(.snappy(duration: 0.15), value: showsActions)
-        .modifier(PaletteSurface(context: context))
+        .glassPanel()
         .onKeyDown { handleKey($0) }
         .onChange(of: query) {
             selection = 0
@@ -147,10 +157,6 @@ struct CommandPaletteView: View {
         }
         .onAppear {
             searchFocused = true
-            if context == .menuBar {
-                model.bootstrap()
-                model.ensureHotkeys()
-            }
         }
     }
 
@@ -216,9 +222,6 @@ struct CommandPaletteView: View {
 
     private func groups(_ visible: [PaletteCommand]) -> [Group] {
         let indexed = visible.enumerated().map { (index: $0.offset, command: $0.element) }
-        guard query.trimmingCharacters(in: .whitespaces).isEmpty else {
-            return [Group(title: t("Results", "Ergebnisse"), rows: indexed)]
-        }
         return PaletteSection.allCases.compactMap { section in
             let rows = indexed.filter { $0.command.section == section }
             return rows.isEmpty ? nil : Group(title: section.title, rows: rows)
@@ -371,19 +374,7 @@ struct CommandPaletteView: View {
     }
 
     private func close() {
-        switch context {
-        case .floating:
-            onClose()
-        case .menuBar:
-            let window = NSApp.keyWindow
-            dismiss()
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(60))
-                if let window, window.isVisible, window.identifier?.rawValue.hasPrefix("meeting") != true {
-                    window.orderOut(nil)
-                }
-            }
-        }
+        onClose()
     }
 
     // MARK: Commands
@@ -538,22 +529,24 @@ struct CommandPaletteView: View {
             }]
         ))
 
-        for entry in model.history.entries.prefix(5) {
+        for entry in model.history.entries {
             let style = HistoryStyle(source: entry.source)
             result.append(PaletteCommand(
                 id: "history.\(entry.id.uuidString)",
-                section: .recent,
+                section: PaletteSection.transcript(entry.source),
                 title: entry.listTitle,
+                subtitle: style.title,
                 symbol: style.symbol,
                 tint: style.tint,
                 accessory: entry.date.formatted(.relative(presentation: .named)),
-                keywords: [entry.polished],
+                keywords: [entry.title, entry.raw, entry.polished].compactMap { $0 },
+                isTranscript: true,
                 actions: [
-                    MenuAction(id: "paste", title: t("Paste", "Einfügen"), symbol: "doc.on.clipboard", keys: ["↵"]) {
-                        model.paste(entry.polished)
-                    },
-                    MenuAction(id: "copy", title: t("Copy to Clipboard", "Kopieren"), symbol: "doc.on.doc", keys: ["⌘", "↵"]) {
+                    MenuAction(id: "copy", title: t("Copy", "Kopieren"), symbol: "doc.on.doc", keys: ["↵"]) {
                         model.copy(entry.polished)
+                    },
+                    MenuAction(id: "paste", title: t("Paste", "Einfügen"), symbol: "doc.on.clipboard", keys: ["⌘", "↵"]) {
+                        model.paste(entry.polished)
                     },
                     MenuAction(id: "delete", title: t("Delete Entry", "Eintrag löschen"), symbol: "trash", keys: ["⌃", "X"], isDestructive: true) {
                         model.history.remove(entry)
@@ -623,17 +616,6 @@ struct CommandPaletteView: View {
     }
 }
 
-private struct PaletteSurface: ViewModifier {
-    var context: PaletteContext
-
-    func body(content: Content) -> some View {
-        switch context {
-        case .floating: content.glassPanel()
-        case .menuBar: content
-        }
-    }
-}
-
 struct HistoryStyle {
     var symbol: String
     var tint: Color
@@ -652,7 +634,7 @@ struct HistoryStyle {
         case "file":
             symbol = "doc.text.fill"
             tint = .teal
-            title = t("File", "Datei")
+            title = t("Transcribed", "Transkribiert")
         default:
             symbol = "mic.fill"
             tint = .blue
@@ -694,8 +676,8 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
     func show() {
         let panel = panel ?? makePanel()
         self.panel = panel
-        let size = PaletteContext.floating.size
-        let root = CommandPaletteView(context: .floating) { [weak self] in self?.hide() }
+        let size = CGSize(width: DS.panelWidth, height: DS.panelHeight)
+        let root = CommandPaletteView { [weak self] in self?.hide() }
             .environment(AppModel.shared)
         let host = NSHostingView(rootView: root)
         host.frame = NSRect(origin: .zero, size: size)
@@ -728,7 +710,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
 
     private func makePanel() -> CommandPalettePanel {
         let panel = CommandPalettePanel(
-            contentRect: NSRect(origin: .zero, size: PaletteContext.floating.size),
+            contentRect: NSRect(origin: .zero, size: CGSize(width: DS.panelWidth, height: DS.panelHeight)),
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
             defer: false

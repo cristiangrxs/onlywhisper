@@ -7,13 +7,12 @@ struct OnlyWhisperApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            CommandPaletteView(context: .menuBar)
+            MenuBarMenu()
                 .environment(model)
         } label: {
             MenuBarLabel()
                 .environment(model)
         }
-        .menuBarExtraStyle(.window)
         .commands {
             CommandGroup(replacing: .appSettings) {
                 SettingsLink()

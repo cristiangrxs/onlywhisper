@@ -47,6 +47,10 @@ enum ShortcutProbe {
 
     /// KeyboardShortcuts' enabled flag is shared mutable state. This file imports it
     /// as preconcurrency so callers on the main actor can pause shortcuts while recording.
+    static var isEnabled: Bool {
+        KeyboardShortcuts.isEnabled
+    }
+
     static func setEnabled(_ enabled: Bool) {
         KeyboardShortcuts.isEnabled = enabled
     }

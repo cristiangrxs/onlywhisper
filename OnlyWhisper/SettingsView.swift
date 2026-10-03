@@ -21,6 +21,7 @@ struct MenuBarLabel: View {
                 model.bind(openWindow: { openWindow(id: $0) }, openSettings: { openSettings() })
                 model.bootstrap()
             }
+            .pausesGlobalShortcutsWhileMenuIsOpen()
     }
 
     private var isRecording: Bool {

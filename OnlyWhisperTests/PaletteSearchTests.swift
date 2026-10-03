@@ -13,6 +13,37 @@ final class PaletteSearchTests: XCTestCase {
         XCTAssertEqual(PaletteSearch.filter(commands, query: "  ").map(\.id), ["a", "b"])
     }
 
+    func testEmptyQueryHidesTranscriptsUntilTheyMatch() {
+        var transcript = command("history.1", "Hello world", keywords: ["meeting notes"])
+        transcript.section = .transcribed
+        transcript.isTranscript = true
+        let commands = [command("settings", "Settings"), transcript]
+        XCTAssertEqual(PaletteSearch.filter(commands, query: "").map(\.id), ["settings"])
+        XCTAssertEqual(PaletteSearch.filter(commands, query: "hello").map(\.id), ["history.1"])
+        XCTAssertEqual(PaletteSearch.filter(commands, query: "notes").map(\.id), ["history.1"])
+        XCTAssertEqual(PaletteSearch.filter(commands, query: "set").map(\.id), ["settings"])
+    }
+
+    func testSearchKeepsCategoriesInSectionOrder() {
+        var dictation = command("dictate", "Start dictation", keywords: ["notes"])
+        dictation.section = .dictation
+        var transcript = command("history.1", "Notes from the call")
+        transcript.section = .transcribed
+        transcript.isTranscript = true
+        XCTAssertEqual(
+            PaletteSearch.filter([transcript, dictation], query: "notes").map(\.id),
+            ["dictate", "history.1"]
+        )
+    }
+
+    func testTranscriptsUseSourceCategories() {
+        XCTAssertEqual(PaletteSection.transcript("file"), .transcribed)
+        XCTAssertEqual(PaletteSection.transcript("dictation"), .dictation)
+        XCTAssertEqual(PaletteSection.transcript("meeting"), .meeting)
+        XCTAssertEqual(PaletteSection.transcript("rewrite"), .rewrite)
+        XCTAssertFalse(PaletteSection.allCases.contains { $0.title == "Recent" || $0.title == "Zuletzt" })
+    }
+
     func testTitlePrefixRanksAboveKeywordMatch() {
         let commands = [
             command("files", "Transcribe files", keywords: ["meeting"]),
