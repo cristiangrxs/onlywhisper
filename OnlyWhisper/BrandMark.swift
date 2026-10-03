@@ -1,6 +1,17 @@
 import AppKit
 import SwiftUI
 
+enum BrandPalette {
+    static let ink = Color(red: 18 / 255, green: 18 / 255, blue: 28 / 255)
+    static let lavender = Color(red: 184 / 255, green: 171 / 255, blue: 1)
+    static let mint = Color(red: 94 / 255, green: 242 / 255, blue: 200 / 255)
+    static let gradient = LinearGradient(
+        colors: [lavender, mint],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+}
+
 /// The OnlyWhisper mark: one soft wave that reads as a W.
 struct BrandMark: Shape {
     func path(in rect: CGRect) -> Path {
@@ -29,17 +40,10 @@ struct BrandIcon: View {
 
     var body: some View {
         ZStack {
-            shape.fill(Color(red: 18 / 255, green: 18 / 255, blue: 28 / 255))
+            shape.fill(BrandPalette.ink)
             BrandMark()
                 .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 184 / 255, green: 171 / 255, blue: 1),
-                            Color(red: 94 / 255, green: 242 / 255, blue: 200 / 255),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
+                    BrandPalette.gradient,
                     style: StrokeStyle(lineWidth: size * 7 / 64, lineCap: .round, lineJoin: .round)
                 )
                 .padding(.horizontal, size * 10 / 64)

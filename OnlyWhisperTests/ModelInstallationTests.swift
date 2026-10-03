@@ -30,6 +30,11 @@ final class ModelInstallationTests: XCTestCase {
         )
     }
 
+    func testParakeetCleanupCoversTheFolderFluidAudioWrites() {
+        let names = ModelPaths.parakeetStorageURLs(in: URL(fileURLWithPath: "/models")).map(\.lastPathComponent)
+        XCTAssertEqual(names, ["Parakeet", "parakeet-ultra", "parakeet-ultra-coreml"])
+    }
+
     func testStoreAdoptsExistingInstallOnce() throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

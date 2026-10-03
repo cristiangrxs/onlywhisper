@@ -7,6 +7,80 @@ final class SpeechRoutingTests: XCTestCase {
         XCTAssertTrue(SpeechChoice.automatic.usesWhisper)
     }
 
+    func testSwitchingBackStillAsksWhenTheSpeechModelAlreadyFinished() {
+        let choice = SpeechSwitchPlanner.choose(
+            engine: .whisper,
+            active: .whisper,
+            pending: .parakeet,
+            engineUsable: true,
+            qwenUsable: false,
+            engineTransferring: false,
+            qwenTransferring: true,
+            otherUsable: false,
+            otherTransferring: false
+        )
+        XCTAssertEqual(choice, .askToCancelDownload(.parakeet))
+        XCTAssertEqual(
+            SpeechSwitchPlanner.confirmCancel(target: .whisper, downloading: .parakeet, targetUsable: false),
+            [.remove(.parakeet), .download(.whisper)]
+        )
+    }
+
+    func testSwitchingBackDuringDownloadAsksToCancel() {
+        let choice = SpeechSwitchPlanner.choose(
+            engine: .whisper,
+            active: .whisper,
+            pending: .parakeet,
+            engineUsable: true,
+            qwenUsable: true,
+            engineTransferring: false,
+            qwenTransferring: false,
+            otherUsable: false,
+            otherTransferring: true
+        )
+        XCTAssertEqual(choice, .askToCancelDownload(.parakeet))
+        XCTAssertEqual(
+            SpeechSwitchPlanner.confirmCancel(target: .whisper, downloading: .parakeet, targetUsable: true),
+            [.remove(.parakeet), .activate(.whisper)]
+        )
+    }
+
+    func testRemoveDeletesTheInstalledModelBeforeTheNewDownload() {
+        XCTAssertEqual(
+            SpeechSwitchPlanner.confirmReplace(target: .parakeet, removeOther: true, other: .whisper, targetUsable: false),
+            [.remove(.whisper), .download(.parakeet)]
+        )
+        XCTAssertEqual(
+            SpeechSwitchPlanner.confirmReplace(target: .parakeet, removeOther: false, other: .whisper, targetUsable: false),
+            [.download(.parakeet)]
+        )
+    }
+
+    func testInstalledModelAsksBeforeItIsReplaced() {
+        let choice = SpeechSwitchPlanner.choose(
+            engine: .parakeet,
+            active: .whisper,
+            pending: nil,
+            engineUsable: false,
+            qwenUsable: true,
+            engineTransferring: false,
+            qwenTransferring: false,
+            otherUsable: true,
+            otherTransferring: false
+        )
+        XCTAssertEqual(choice, .askToReplace(.whisper))
+    }
+
+    func testParakeetCoversEuropeanLanguagesAndAutomatic() {
+        XCTAssertTrue(SpeechChoice.automatic.supportsParakeet)
+        XCTAssertTrue(SpeechChoice.german.supportsParakeet)
+        XCTAssertTrue(SpeechChoice.ukrainian.supportsParakeet)
+        XCTAssertFalse(SpeechChoice.japanese.supportsParakeet)
+        XCTAssertFalse(SpeechChoice.norwegian.supportsParakeet)
+        XCTAssertEqual(SpeechEngine.parakeet.modelID, .parakeet)
+        XCTAssertEqual(SpeechEngine.whisper.other, .parakeet)
+    }
+
     func testEveryLanguageUsesWhisper() {
         for choice in SpeechChoice.allCases {
             XCTAssertTrue(choice.usesWhisper, choice.rawValue)

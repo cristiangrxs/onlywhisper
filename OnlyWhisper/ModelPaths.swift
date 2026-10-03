@@ -9,12 +9,23 @@ enum ModelPaths {
         return url
     }
 
-    /// FluidAudio strips the last path component and writes `parakeet-ultra-coreml` next to it.
+    /// Passed to FluidAudio. The weights themselves are written beside this folder.
     static var parakeet: URL { root.appending(path: "Parakeet", directoryHint: .isDirectory) }
     static var whisper: URL { root.appending(path: "Whisper", directoryHint: .isDirectory) }
     static var qwen: URL { root.appending(path: "Qwen3-4B-Instruct-2507-4bit", directoryHint: .isDirectory) }
-    /// Weights FluidAudio writes beside `parakeet`, after stripping that last path component.
-    static var parakeetWeights: URL { root.appending(path: "parakeet-ultra-coreml", directoryHint: .isDirectory) }
+    /// FluidAudio strips `-coreml` from the repo name, so Ultra lands in `parakeet-ultra`.
+    /// Older builds used the unstripped name. Both are removed when Parakeet is deleted.
+    static func parakeetStorageURLs(in root: URL) -> [URL] {
+        [
+            root.appending(path: "Parakeet", directoryHint: .isDirectory),
+            root.appending(path: "parakeet-ultra", directoryHint: .isDirectory),
+            root.appending(path: "parakeet-ultra-coreml", directoryHint: .isDirectory),
+        ]
+    }
+
+    static var parakeetStorageURLs: [URL] { parakeetStorageURLs(in: root) }
+
+    static var parakeetWeights: URL { root.appending(path: "parakeet-ultra", directoryHint: .isDirectory) }
     static var diarization: URL { root.appending(path: "Diarization", directoryHint: .isDirectory) }
     static var installations: URL { root.appending(path: "installations.json") }
 

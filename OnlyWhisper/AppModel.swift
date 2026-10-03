@@ -37,6 +37,92 @@ enum DictationDelivery: Equatable {
     }
 }
 
+enum SpeechSwitchSurface: Equatable, Sendable {
+    case setup
+    case settings
+}
+
+struct SpeechSwitchPrompt: Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
+        /// The other speech model is already on disk. Setup asks; Settings keeps it.
+        case replaceInstalled
+        /// The other speech model is still downloading.
+        case cancelDownload
+        /// Settings asks before downloading a speech model that is not on this Mac yet.
+        case confirmDownload
+    }
+
+    var kind: Kind
+    var target: SpeechEngine
+    var other: SpeechEngine
+    var surface: SpeechSwitchSurface
+}
+
+enum SpeechSwitchChoice: Equatable, Sendable {
+    /// The tapped model is already the one in use, and nothing else needs to be fetched.
+    case keepCurrent
+    case install(SpeechEngine)
+    case askToReplace(SpeechEngine)
+    case askToCancelDownload(SpeechEngine)
+}
+
+enum SpeechSwitchEffect: Equatable, Sendable {
+    /// Delete this speech model, including a download that only got partway.
+    case remove(SpeechEngine)
+    case activate(SpeechEngine)
+    case download(SpeechEngine)
+}
+
+/// Decides which question to ask before a speech model takes over.
+enum SpeechSwitchPlanner {
+    static func choose(
+        engine: SpeechEngine,
+        active: SpeechEngine,
+        pending: SpeechEngine?,
+        engineUsable: Bool,
+        qwenUsable: Bool,
+        engineTransferring: Bool,
+        qwenTransferring: Bool,
+        otherUsable: Bool,
+        otherTransferring: Bool
+    ) -> SpeechSwitchChoice {
+        let other = engine.other
+        // A chosen model that is not ready yet is still being installed, even before the transfer flag flips.
+        if otherTransferring || pending == other {
+            return .askToCancelDownload(other)
+        }
+        if pending == engine || (pending == nil && active == engine) {
+            let needsSpeech = !engineUsable && !engineTransferring
+            let needsQwen = !qwenUsable && !qwenTransferring
+            if needsSpeech || needsQwen {
+                return .install(engine)
+            }
+            return .keepCurrent
+        }
+        if otherUsable {
+            return .askToReplace(other)
+        }
+        return .install(engine)
+    }
+
+    /// Remove deletes the installed model immediately. The chosen model is activated or downloaded after that.
+    static func confirmReplace(target: SpeechEngine, removeOther: Bool, other: SpeechEngine, targetUsable: Bool) -> [SpeechSwitchEffect] {
+        var effects: [SpeechSwitchEffect] = []
+        if removeOther {
+            effects.append(.remove(other))
+        }
+        effects.append(targetUsable ? .activate(target) : .download(target))
+        return effects
+    }
+
+    /// Cancelling a download deletes that model's files, then the model being returned to is activated or downloaded.
+    static func confirmCancel(target: SpeechEngine, downloading: SpeechEngine, targetUsable: Bool) -> [SpeechSwitchEffect] {
+        var effects: [SpeechSwitchEffect] = [.remove(downloading)]
+        effects.append(targetUsable ? .activate(target) : .download(target))
+        return effects
+    }
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -52,6 +138,11 @@ final class AppModel {
     var level: Float = 0
     var setupStep = 0
     var needsSetup = true
+    /// Speech model picked in this setup visit. Finish stays off until one is chosen.
+    var setupSpeechChoice: SpeechEngine?
+    /// Asks whether to keep or remove the speech model that is already on disk.
+    var speechSwitchPrompt: SpeechSwitchPrompt?
+    private var speechInstallTask: Task<Void, Never>?
     var meetingTurns: [MeetingTurn] = []
     var meetingNotes: MeetingNotes?
     var meetingActive = false
@@ -252,7 +343,11 @@ final class AppModel {
     func bootstrap() {
         guard !didBootstrap else { return }
         didBootstrap = true
+        downloads.setSpeechRequirement(settings.speechModel.modelID)
         downloads.refreshReadyState()
+        let engine = settings.speechModel
+        Task { await self.speech.use(engine) }
+        resumePendingSpeechDownload()
         ensureHotkeys()
         watchPermissions()
         watchAppActivation()
@@ -263,8 +358,7 @@ final class AppModel {
             needsSetup = false
         } else {
             needsSetup = true
-            opener?("setup")
-            NSApp.activate()
+            presentSetupWindow()
         }
         applyLaunchAtLogin()
         watchWindowClose()
@@ -356,6 +450,10 @@ final class AppModel {
 
     func enqueueFiles(_ urls: [URL]) {
         guard requireUsableModel(speechModel) else { return }
+        if let reason = unsupportedSpeechLanguageMessage() {
+            showOverlayHint(reason, milliseconds: 2800)
+            return
+        }
         files.enqueue(urls, speech: speech, language: settings.language)
     }
 
@@ -414,7 +512,294 @@ final class AppModel {
         downloads.remove(id)
     }
 
-    private var speechModel: ModelID { .whisper }
+    private var speechModel: ModelID { settings.speechModel.modelID }
+
+    /// The speech model shown as selected. A download in progress stays selected before it takes over.
+    /// The download confirmation highlights the new model until it is cancelled.
+    var selectedSpeechEngine: SpeechEngine {
+        if let prompt = speechSwitchPrompt, prompt.kind == .confirmDownload {
+            return prompt.target
+        }
+        return settings.pendingSpeechModel ?? settings.speechModel
+    }
+
+    var canSwitchSpeechEngine: Bool {
+        phase == .idle && !meetingActive && !meetingPreparing
+    }
+
+    var speechSwitchTitle: String {
+        guard let prompt = speechSwitchPrompt else { return "" }
+        let name = ModelInfo.info(prompt.other.modelID)?.name ?? ""
+        let downloading = ModelInfo.info(prompt.target.modelID)?.name ?? ""
+        switch prompt.kind {
+        case .replaceInstalled:
+            return t("\(name) is already installed", "\(name) ist schon installiert")
+        case .cancelDownload:
+            return t("Cancel the \(name) download?", "\(name)-Download abbrechen?")
+        case .confirmDownload:
+            return t("Download \(downloading)?", "\(downloading) laden?")
+        }
+    }
+
+    var speechSwitchMessage: String {
+        guard let prompt = speechSwitchPrompt else { return "" }
+        let kept = ModelInfo.info(prompt.other.modelID)?.name ?? ""
+        let next = ModelInfo.info(prompt.target.modelID)?.name ?? ""
+        switch prompt.kind {
+        case .cancelDownload:
+            return t(
+                "The download will stop and the files already saved for \(kept) will be removed.",
+                "Der Download stoppt und die schon für \(kept) geladenen Dateien werden entfernt."
+            )
+        case .confirmDownload:
+            return t(
+                "\(next) will be downloaded. \(kept) keeps transcribing until it is ready.",
+                "\(next) wird geladen. \(kept) transkribiert, bis es bereit ist."
+            )
+        case .replaceInstalled:
+            if downloads.isUsable(prompt.target.modelID) {
+                return t(
+                    "\(next) will transcribe. Keep \(kept) on this Mac, or remove it.",
+                    "\(next) transkribiert. \(kept) kann auf diesem Mac bleiben oder entfernt werden."
+                )
+            }
+            return t(
+                "\(next) will transcribe once it is ready. Keep \(kept), or remove it now.",
+                "\(next) transkribiert, sobald es bereit ist. \(kept) kann bleiben oder jetzt entfernt werden."
+            )
+        }
+    }
+
+    /// Picks the speech model. Setup can ask before replacing an installed model. Settings switches and keeps the other one.
+    func chooseSpeechEngine(_ engine: SpeechEngine, confirmingReplacement: Bool = true) {
+        guard canSwitchSpeechEngine else { return }
+        let surface: SpeechSwitchSurface = confirmingReplacement ? .setup : .settings
+        switch speechSwitchChoice(for: engine) {
+        case .keepCurrent:
+            if speechSwitchPrompt?.kind == .confirmDownload {
+                speechSwitchPrompt = nil
+            }
+            setupSpeechChoice = engine
+        case .install:
+            if !confirmingReplacement, !downloads.isUsable(engine.modelID) {
+                proposeSpeechDownload(engine)
+            } else {
+                installSpeechEngine(engine)
+            }
+        case .askToReplace(let other) where confirmingReplacement:
+            speechSwitchPrompt = SpeechSwitchPrompt(
+                kind: .replaceInstalled,
+                target: engine,
+                other: other,
+                surface: .setup
+            )
+        case .askToReplace:
+            if !downloads.isUsable(engine.modelID) {
+                proposeSpeechDownload(engine)
+            } else {
+                installSpeechEngine(engine)
+            }
+        case .askToCancelDownload(let other):
+            speechSwitchPrompt = SpeechSwitchPrompt(
+                kind: .cancelDownload,
+                target: engine,
+                other: other,
+                surface: surface
+            )
+        }
+    }
+
+    /// Asks before a settings download. Cancelling leaves the current speech model selected.
+    private func proposeSpeechDownload(_ engine: SpeechEngine) {
+        speechSwitchPrompt = SpeechSwitchPrompt(
+            kind: .confirmDownload,
+            target: engine,
+            other: settings.speechModel,
+            surface: .settings
+        )
+    }
+
+    func confirmSpeechDownload() {
+        guard let prompt = speechSwitchPrompt, prompt.kind == .confirmDownload else { return }
+        speechSwitchPrompt = nil
+        installSpeechEngine(prompt.target)
+    }
+
+    /// Stops a speech-model download and selects the model that was already in use when it is still installed.
+    func cancelPendingSpeechDownload() {
+        let pending = settings.pendingSpeechModel
+        settings.pendingSpeechModel = nil
+        settings.removePendingPredecessor = false
+        speechSwitchPrompt = nil
+        if setupSpeechChoice == pending, downloads.isUsable(settings.speechModel.modelID) {
+            setupSpeechChoice = settings.speechModel
+        }
+        speechInstallTask?.cancel()
+        speechInstallTask = Task { @MainActor in
+            await self.downloads.stop()
+            guard !Task.isCancelled else { return }
+            if let pending {
+                await self.downloads.discardDownloadedFiles(pending.modelID)
+            }
+        }
+    }
+
+    private func installSpeechEngine(_ engine: SpeechEngine) {
+        settings.pendingSpeechModel = engine
+        setupSpeechChoice = engine
+        performSpeechChange {
+            await self.installSpeechEngineNow(engine, removeFirst: nil, removeWhenReady: false)
+        }
+    }
+
+    func confirmSpeechSwitch(removeOther: Bool) {
+        guard let prompt = speechSwitchPrompt, prompt.kind == .replaceInstalled else { return }
+        speechSwitchPrompt = nil
+        let target = prompt.target
+        let other = prompt.other
+        settings.pendingSpeechModel = target
+        setupSpeechChoice = target
+        performSpeechChange {
+            let removeFirst: SpeechEngine? = removeOther ? other : nil
+            await self.installSpeechEngineNow(target, removeFirst: removeFirst, removeWhenReady: false)
+        }
+    }
+
+    /// Stops the in-progress speech download and deletes the files it has written.
+    func confirmCancelSpeechDownload() {
+        guard let prompt = speechSwitchPrompt, prompt.kind == .cancelDownload else { return }
+        speechSwitchPrompt = nil
+        let target = prompt.target
+        let downloading = prompt.other
+        performSpeechChange {
+            await self.abandonSpeechDownload(downloading)
+            guard !Task.isCancelled else { return }
+            await self.installSpeechEngineNow(target, removeFirst: nil, removeWhenReady: false)
+        }
+    }
+
+    func dismissSpeechSwitch() {
+        speechSwitchPrompt = nil
+    }
+
+    private func speechSwitchChoice(for engine: SpeechEngine) -> SpeechSwitchChoice {
+        SpeechSwitchPlanner.choose(
+            engine: engine,
+            active: settings.speechModel,
+            pending: settings.pendingSpeechModel,
+            engineUsable: downloads.isUsable(engine.modelID),
+            qwenUsable: downloads.isUsable(.qwen),
+            engineTransferring: downloads.isTransferring(engine.modelID),
+            qwenTransferring: downloads.isTransferring(.qwen),
+            otherUsable: downloads.isUsable(engine.other.modelID),
+            otherTransferring: downloads.isTransferring(engine.other.modelID)
+        )
+    }
+
+    private func performSpeechChange(_ work: @escaping @MainActor () async -> Void) {
+        speechInstallTask?.cancel()
+        speechInstallTask = Task { @MainActor in
+            await work()
+        }
+    }
+
+    private func installSpeechEngineNow(_ engine: SpeechEngine, removeFirst: SpeechEngine?, removeWhenReady: Bool) async {
+        guard !Task.isCancelled else { return }
+        setupSpeechChoice = engine
+        if let removeFirst {
+            await releaseSpeechModels()
+            await downloads.discardDownloadedFiles(removeFirst.modelID)
+        }
+        guard !Task.isCancelled else { return }
+        if downloads.isUsable(engine.modelID) {
+            await activateSpeechEngineNow(engine)
+            return
+        }
+        settings.pendingSpeechModel = engine
+        settings.removePendingPredecessor = removeWhenReady
+        self.cancelPrewarm()
+        await downloads.stop()
+        guard !Task.isCancelled else { return }
+        await unloadSpeechModels()
+        guard !Task.isCancelled else { return }
+        await downloads.download([engine.modelID, .qwen], replacingOutdated: true)
+        guard !Task.isCancelled else { return }
+        await unloadSpeechModels()
+        promotePendingSpeechModelIfReady()
+    }
+
+    private func activateSpeechEngineNow(_ engine: SpeechEngine) async {
+        settings.speechModel = engine
+        alignSpeechLanguage()
+        settings.pendingSpeechModel = nil
+        settings.removePendingPredecessor = false
+        downloads.useSpeechRequirement(engine.modelID)
+        await downloads.stop()
+        guard !Task.isCancelled else { return }
+        await speech.use(engine)
+        guard !Task.isCancelled else { return }
+        if !downloads.isUsable(.qwen) {
+            await downloads.download([.qwen], replacingOutdated: true)
+        }
+    }
+
+    /// Stops the transfer and deletes every file the abandoned speech model has on disk.
+    private func abandonSpeechDownload(_ engine: SpeechEngine) async {
+        await downloads.stop()
+        guard !Task.isCancelled else { return }
+        await releaseSpeechModels()
+        await downloads.discardDownloadedFiles(engine.modelID)
+        if settings.pendingSpeechModel == engine {
+            settings.pendingSpeechModel = nil
+            settings.removePendingPredecessor = false
+        }
+    }
+
+    private func resumePendingSpeechDownload() {
+        guard let pending = settings.pendingSpeechModel else { return }
+        setupSpeechChoice = pending
+        if downloads.isUsable(pending.modelID) {
+            promotePendingSpeechModelIfReady()
+            return
+        }
+        let removeWhenReady = settings.removePendingPredecessor
+        performSpeechChange {
+            await self.installSpeechEngineNow(pending, removeFirst: nil, removeWhenReady: removeWhenReady)
+        }
+    }
+
+    private func promotePendingSpeechModelIfReady() {
+        guard let pending = settings.pendingSpeechModel else { return }
+        guard downloads.isUsable(pending.modelID) else { return }
+        let remove = settings.removePendingPredecessor
+        let previous = settings.speechModel
+        settings.pendingSpeechModel = nil
+        settings.removePendingPredecessor = false
+        settings.speechModel = pending
+        alignSpeechLanguage()
+        downloads.useSpeechRequirement(pending.modelID)
+        let drop = remove && previous != pending ? previous : nil
+        Task { @MainActor in
+            await self.speech.use(pending)
+            if let drop {
+                self.downloads.remove(drop.modelID)
+            }
+        }
+    }
+
+    private func alignSpeechLanguage() {
+        guard settings.speechModel == .parakeet, !settings.language.supportsParakeet else { return }
+        settings.language = .automatic
+    }
+
+    private func unsupportedSpeechLanguageMessage() -> String? {
+        guard settings.speechModel == .parakeet, !settings.language.supportsParakeet else { return nil }
+        let language = settings.language.title
+        return t(
+            "Parakeet doesn't cover \(language). Pick Whisper, or a European language.",
+            "Parakeet kann \(language) nicht. Wähle Whisper oder eine europäische Sprache."
+        )
+    }
 
     /// Opens setup until the first install is finished. After that, a removed model is recovered from Settings.
     @discardableResult
@@ -430,9 +815,8 @@ final class AppModel {
                 showModelSettings()
             } else {
                 needsSetup = true
-                setupStep = 4
-                opener?("setup")
-                NSApp.activate()
+                setupStep = 2
+                presentSetupWindow()
             }
             return false
         }
@@ -474,8 +858,54 @@ final class AppModel {
             presentMeetingWindow()
             return
         }
+        if id == "setup" {
+            presentSetupWindow(waitingForMenu: true)
+            return
+        }
         opener?(id)
         orderFront { $0.identifier?.rawValue.hasPrefix(id) == true && $0.isVisible }
+    }
+
+    private var setupOpenTask: Task<Void, Never>?
+
+    /// A menu-bar click is still tracking when the item runs. Opening immediately lets the
+    /// previous app cover the window. `NSApp.activate()` also refuses to take focus from the
+    /// app in front, so the window is ordered forward explicitly and then left at the normal level.
+    private func presentSetupWindow(waitingForMenu: Bool = false) {
+        setupOpenTask?.cancel()
+        setupOpenTask = Task { @MainActor in
+            if waitingForMenu {
+                try? await Task.sleep(for: .milliseconds(280))
+            }
+            guard !Task.isCancelled else { return }
+            opener?("setup")
+            for attempt in 0..<8 {
+                guard !Task.isCancelled else { return }
+                if let window = NSApp.windows.first(where: Self.isSetupWindow) {
+                    Self.bringSetupToFront(window)
+                }
+                try? await Task.sleep(for: .milliseconds(attempt == 0 ? 40 : 70))
+            }
+        }
+    }
+
+    private static func isSetupWindow(_ window: NSWindow) -> Bool {
+        let identifier = window.identifier?.rawValue ?? ""
+        if identifier == "onlywhisper.setup" || identifier.hasPrefix("setup") { return true }
+        return window.title == "Setup" || window.title == "Einrichtung"
+    }
+
+    /// One-shot. Level stays `.normal`, so clicking another app covers this window again.
+    private static func bringSetupToFront(_ window: NSWindow) {
+        window.level = .normal
+        window.hidesOnDeactivate = false
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        window.isMovableByWindowBackground = true
+        NSApp.setActivationPolicy(.regular)
+        NSApp.unhide(nil)
+        NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        window.orderFrontRegardless()
+        window.makeKey()
     }
 
     private var meetingOpenTask: Task<Void, Never>?
@@ -522,6 +952,14 @@ final class AppModel {
 
     func requestMicrophone() async {
         _ = await AVCaptureDevice.requestAccess(for: .audio)
+    }
+
+    func openMicrophoneSettings() async {
+        await requestMicrophone()
+        guard !microphoneGranted else { return }
+        if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     func requestAccessibility() {
@@ -646,29 +1084,13 @@ final class AppModel {
     }
 
     func continueSetup() async {
-        switch setupStep {
-        case 0:
-            setupStep = 1
-        case 1:
-            await requestMicrophone()
-            setupStep = 2
-        case 2:
-            requestAccessibility()
-            setupStep = 3
-        case 3:
-            requestInputMonitoring()
-            setupStep = 4
-        default:
-            cancelPrewarm()
-            await unloadSpeechModels()
-            await downloads.downloadRequiredModels()
-            await unloadSpeechModels()
-            if downloads.isReady {
-                settings.setupCompleted = true
-                needsSetup = false
-                NSApp.keyWindow?.close()
-            }
-        }
+        guard setupStep < 2 else { return }
+        setupStep += 1
+    }
+
+    func finishSetup() {
+        settings.setupCompleted = true
+        needsSetup = false
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -744,11 +1166,14 @@ final class AppModel {
         guard microphoneGranted else {
             needsSetup = true
             setupStep = 1
-            opener?("setup")
-            NSApp.activate()
+            presentSetupWindow()
             return
         }
         guard requireUsableModel(speechModel) else { return }
+        if let reason = unsupportedSpeechLanguageMessage() {
+            showOverlayHint(reason, milliseconds: 2800)
+            return
+        }
         dictationEpoch += 1
         dictationTask?.cancel()
         dictationSession.reset()
@@ -1184,8 +1609,12 @@ final class AppModel {
     }
 
     func applyRewrite(_ action: RewriteAction) async {
-        let instruction = action.instruction(target: settings.translateTarget)
-        await rewrite(instruction: instruction)
+        if action == .translate {
+            guard let target = settings.translateTarget else { return }
+            await rewrite(instruction: action.instruction(target: target))
+            return
+        }
+        await rewrite(instruction: action.instruction(target: settings.translateTarget ?? .english))
     }
 
     func applyCustomRewrite() async {
@@ -1252,6 +1681,11 @@ final class AppModel {
             }
         }
         guard requireUsableModel(speechModel) else { return }
+        if let reason = unsupportedSpeechLanguageMessage() {
+            meetingStatus = reason
+            showMeeting()
+            return
+        }
         resetMeetingCapture()
         prepareMeetingAudioChoice()
         meetingStatus = t("Preparing…", "Wird vorbereitet…")

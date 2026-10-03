@@ -42,6 +42,7 @@ struct SettingsView: View {
             }
         }
         .glassWindow()
+        .speechSwitchDialog(for: .settings)
         .background(SettingsWindowFinder())
         .onAppear {
             model.ensureHotkeys()
@@ -200,40 +201,95 @@ private struct LanguageSettings: View {
         SettingsPage {
             LanguageField(
                 title: t("Speech", "Gesprochen"),
-                selection: Binding(get: { model.settings.language }, set: { model.settings.language = $0 }),
-                choices: SpeechChoice.allCases
+                selection: Binding(
+                    get: { model.settings.language },
+                    set: { model.settings.language = $0 ?? .automatic }
+                ),
+                choices: speechChoices
             )
             LanguageField(
                 title: t("Translate to", "Übersetzen nach"),
-                selection: Binding(get: { model.settings.translateTarget }, set: { model.settings.translateTarget = $0 }),
-                choices: SpeechChoice.allCases.filter { $0 != .automatic }
+                selection: Binding(
+                    get: { model.settings.translateTarget },
+                    set: { model.settings.translateTarget = $0 }
+                ),
+                choices: SpeechChoice.allCases.filter { $0 != .automatic },
+                includesOff: true
             )
             LabeledContent("") {
-                Text(t(
-                    "Automatic detects the spoken language. A fixed choice is faster and more accurate.",
-                    "Automatisch erkennt die gesprochene Sprache. Eine feste Wahl ist schneller und genauer."
-                ))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                Text(languageNote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    private var speechChoices: [SpeechChoice] {
+        if model.settings.speechModel == .parakeet {
+            return SpeechChoice.allCases.filter(\.supportsParakeet)
+        }
+        return SpeechChoice.allCases
+    }
+
+    private var languageNote: String {
+        if model.settings.speechModel == .parakeet {
+            return t(
+                "Parakeet covers German, English, and the other European languages. Automatic stays inside that set. Off leaves text untranslated.",
+                "Parakeet kann Deutsch, Englisch und die anderen europäischen Sprachen. Automatisch bleibt in dieser Auswahl. Aus lässt den Text unübersetzt."
+            )
+        }
+        return t(
+            "Automatic detects the spoken language. A fixed choice is faster and more accurate. Off leaves text untranslated.",
+            "Automatisch erkennt die gesprochene Sprache. Eine feste Wahl ist schneller und genauer. Aus lässt den Text unübersetzt."
+        )
+    }
+}
+
+private enum LanguageRow: Hashable, Identifiable {
+    case off
+    case language(SpeechChoice)
+
+    var id: String {
+        switch self {
+        case .off: "off"
+        case .language(let choice): choice.rawValue
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .off: t("Off", "Aus")
+        case .language(let choice): choice.title
+        }
+    }
+
+    func matches(_ needle: String) -> Bool {
+        switch self {
+        case .off:
+            title.localizedStandardContains(needle) || needle.caseInsensitiveCompare("off") == .orderedSame
+        case .language(let choice):
+            choice.title.localizedStandardContains(needle)
+                || choice.code?.caseInsensitiveCompare(needle) == .orderedSame
         }
     }
 }
 
 private struct LanguageField: View {
     var title: String
-    @Binding var selection: SpeechChoice
+    @Binding var selection: SpeechChoice?
     var choices: [SpeechChoice]
+    var includesOff = false
     @State private var query = ""
 
-    private var filtered: [SpeechChoice] {
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { return choices }
-        return choices.filter { choice in
-            choice.title.localizedStandardContains(needle)
-                || choice.code?.caseInsensitiveCompare(needle) == .orderedSame
+    private var rows: [LanguageRow] {
+        var rows = choices.map { LanguageRow.language($0) }
+        if includesOff {
+            rows.insert(.off, at: 0)
         }
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return rows }
+        return rows.filter { $0.matches(needle) }
     }
 
     var body: some View {
@@ -241,15 +297,27 @@ private struct LanguageField: View {
             VStack(alignment: .leading, spacing: 6) {
                 TextField(t("Search", "Suchen"), text: $query)
                     .textFieldStyle(.roundedBorder)
-                List(filtered, selection: Binding<SpeechChoice?>(
-                    get: { selection },
-                    set: { if let choice = $0 { selection = choice } }
-                )) { choice in
-                    Text(choice.title).tag(choice)
+                List(rows, selection: Binding<LanguageRow?>(
+                    get: { selectedRow },
+                    set: { row in
+                        switch row {
+                        case .off: selection = nil
+                        case .language(let choice): selection = choice
+                        case nil: break
+                        }
+                    }
+                )) { row in
+                    Text(row.title).tag(row)
                 }
                 .frame(height: 132)
             }
         }
+    }
+
+    private var selectedRow: LanguageRow? {
+        if includesOff, selection == nil { return .off }
+        guard let selection else { return nil }
+        return .language(selection)
     }
 }
 
@@ -531,6 +599,27 @@ private struct ModelSettings: View {
                 Spacer(minLength: DS.spacingS)
                 headerActions
             }
+            VStack(alignment: .leading, spacing: DS.spacingS) {
+                Text(t("Speech recognition", "Spracherkennung"))
+                    .font(.system(size: 13, weight: .semibold))
+                Text(t(
+                    "One model transcribes dictation, files, and meetings. The other can stay installed.",
+                    "Ein Modell transkribiert Diktat, Dateien und Meetings. Das andere kann installiert bleiben."
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                SpeechEnginePicker(selection: model.selectedSpeechEngine) { engine in
+                    model.chooseSpeechEngine(engine, confirmingReplacement: false)
+                }
+                .disabled(!model.canSwitchSpeechEngine)
+                if let pending = model.settings.pendingSpeechModel, pending != model.settings.speechModel {
+                    Text(speechInstallNote(pending: pending, active: model.settings.speechModel))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             ForEach(ModelInfo.catalog) { info in
                 let state = model.downloads.state(of: info)
                 ModelCard(
@@ -545,7 +634,13 @@ private struct ModelSettings: View {
                     onDownload: { Task { await model.downloadModel(info.id) } },
                     onUpdate: { prompt = .update(info.id) },
                     onRemove: { prompt = .remove(info.id) },
-                    onCancel: { model.downloads.cancel() }
+                    onCancel: {
+                        if model.settings.pendingSpeechModel != nil, model.downloads.isTransferring(info.id) {
+                            model.cancelPendingSpeechDownload()
+                        } else {
+                            model.downloads.cancel()
+                        }
+                    }
                 )
             }
         }
@@ -654,18 +749,33 @@ private struct ModelSettings: View {
         model.downloads.sizeText(for: info.id) ?? t("the downloaded files", "die geladenen Dateien")
     }
 
+    private func speechInstallNote(pending: SpeechEngine, active: SpeechEngine) -> String {
+        let pendingName = ModelInfo.info(pending.modelID)?.name ?? ""
+        let activeName = ModelInfo.info(active.modelID)?.name ?? ""
+        guard model.downloads.isUsable(active.modelID) else {
+            return t(
+                "\(pendingName) is downloading.",
+                "\(pendingName) wird geladen."
+            )
+        }
+        return t(
+            "\(pendingName) is downloading. \(activeName) keeps transcribing until it is ready.",
+            "\(pendingName) wird geladen. \(activeName) transkribiert, bis es bereit ist."
+        )
+    }
+
     private func removalMessage(_ info: ModelInfo) -> String {
         let effect: String
         switch info.id {
         case .parakeet:
             effect = t(
-                "Dictation in most languages needs this model.",
-                "Diktat in den meisten Sprachen braucht dieses Modell."
+                "Parakeet transcribes when it is the selected speech model.",
+                "Parakeet transkribiert, wenn es als Spracherkennung gewählt ist."
             )
         case .whisper:
             effect = t(
-                "Dictation and meetings need this model.",
-                "Diktat und Meetings brauchen dieses Modell."
+                "Whisper transcribes when it is the selected speech model.",
+                "Whisper transkribiert, wenn es als Spracherkennung gewählt ist."
             )
         case .qwen:
             effect = t(
@@ -690,6 +800,109 @@ private enum ModelChangePrompt: Identifiable {
         case .remove(let model): "remove-\(model.rawValue)"
         case .update(let model): "update-\(model.rawValue)"
         case .updateAll: "update-all"
+        }
+    }
+}
+
+struct SpeechEnginePicker: View {
+    var selection: SpeechEngine?
+    var onSelect: (SpeechEngine) -> Void
+
+    var body: some View {
+        VStack(spacing: DS.spacingS) {
+            ForEach(SpeechEngine.allCases) { engine in
+                Button {
+                    onSelect(engine)
+                } label: {
+                    SpeechEngineCard(engine: engine, selected: selection == engine)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("speech-engine-\(engine.rawValue)")
+            }
+        }
+    }
+}
+
+private struct SpeechEngineCard: View {
+    var engine: SpeechEngine
+    var selected: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: DS.spacingM) {
+            IconTile(symbol: info?.symbol ?? "waveform", tint: selected ? .green : .secondary, size: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(info?.name ?? "")
+                    .font(.system(size: 13, weight: .semibold))
+                Text(info?.summary ?? "")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+            }
+            Spacer(minLength: DS.spacingS)
+            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(selected ? Color.green : Color.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card(padding: DS.spacingM)
+        .overlay {
+            RoundedRectangle(cornerRadius: DS.cardRadius, style: .continuous)
+                .strokeBorder(selected ? Color.green.opacity(0.85) : Color.clear, lineWidth: 1.5)
+        }
+    }
+
+    private var info: ModelInfo? {
+        ModelInfo.info(engine.modelID)
+    }
+}
+
+extension View {
+    func speechSwitchDialog(for surface: SpeechSwitchSurface) -> some View {
+        modifier(SpeechSwitchDialog(surface: surface))
+    }
+}
+
+private struct SpeechSwitchDialog: ViewModifier {
+    var surface: SpeechSwitchSurface
+    @Environment(AppModel.self) private var model
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            model.speechSwitchTitle,
+            isPresented: Binding(
+                get: { model.speechSwitchPrompt?.surface == surface },
+                set: { if !$0, model.speechSwitchPrompt?.surface == surface { model.dismissSpeechSwitch() } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if model.speechSwitchPrompt?.kind == .confirmDownload {
+                Button(t("Download", "Laden")) {
+                    model.confirmSpeechDownload()
+                }
+                Button(t("Cancel", "Abbrechen"), role: .cancel) {
+                    model.dismissSpeechSwitch()
+                }
+            } else if model.speechSwitchPrompt?.kind == .cancelDownload {
+                Button(t("Cancel download", "Download abbrechen"), role: .destructive) {
+                    model.confirmCancelSpeechDownload()
+                }
+                Button(t("Continue download", "Download fortsetzen"), role: .cancel) {
+                    model.dismissSpeechSwitch()
+                }
+            } else {
+                Button(t("Keep", "Behalten")) {
+                    model.confirmSpeechSwitch(removeOther: false)
+                }
+                Button(t("Remove", "Entfernen"), role: .destructive) {
+                    model.confirmSpeechSwitch(removeOther: true)
+                }
+                Button(t("Cancel", "Abbrechen"), role: .cancel) {
+                    model.dismissSpeechSwitch()
+                }
+            }
+        } message: {
+            Text(model.speechSwitchMessage)
         }
     }
 }

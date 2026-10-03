@@ -67,6 +67,11 @@ enum SpeechChoice: String, Codable, CaseIterable, Identifiable, Sendable {
     /// Whisper transcribes every language. A missing code asks it to detect the language.
     var usesWhisper: Bool { true }
 
+    /// Parakeet Ultra covers these European languages. Automatic stays inside that set.
+    var supportsParakeet: Bool {
+        self == .automatic || spec.parakeet
+    }
+
     var title: String { t(spec.english, spec.german) }
 
     private var spec: (code: String?, english: String, german: String, parakeet: Bool) {
@@ -180,10 +185,44 @@ enum RewriteAction: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// The speech model that transcribes. Qwen stays separate and is always installed with it.
+enum SpeechEngine: String, Codable, CaseIterable, Identifiable, Sendable {
+    case parakeet
+    case whisper
+
+    var id: String { rawValue }
+
+    var modelID: ModelID {
+        switch self {
+        case .parakeet: .parakeet
+        case .whisper: .whisper
+        }
+    }
+
+    var other: SpeechEngine {
+        switch self {
+        case .parakeet: .whisper
+        case .whisper: .parakeet
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class SettingsStore {
     var language: SpeechChoice {
+        didSet { save() }
+    }
+    /// Installed choice used for dictation, files, and meetings. Missing settings stay on Whisper.
+    var speechModel: SpeechEngine {
+        didSet { save() }
+    }
+    /// A model the user picked that is still downloading. The active model keeps transcribing until this one is usable.
+    var pendingSpeechModel: SpeechEngine? {
+        didSet { save() }
+    }
+    /// When the pending model becomes usable, remove the one it replaces.
+    var removePendingPredecessor: Bool {
         didSet { save() }
     }
     var polishEnabled: Bool {
@@ -198,7 +237,8 @@ final class SettingsStore {
     var systemAudioInMeetings: Bool {
         didSet { save() }
     }
-    var translateTarget: SpeechChoice {
+    /// Nil means translation is off and the text stays as it is.
+    var translateTarget: SpeechChoice? {
         didSet { save() }
     }
     var setupCompleted: Bool {
@@ -216,17 +256,31 @@ final class SettingsStore {
             try? JSONDecoder().decode(Stored.self, from: $0)
         }
         language = stored?.language ?? .automatic
+        speechModel = stored?.speechModel ?? .whisper
+        pendingSpeechModel = stored?.pendingSpeechModel
+        removePendingPredecessor = stored?.removePendingPredecessor ?? false
         polishEnabled = stored?.polishEnabled ?? true
         launchAtLogin = stored?.launchAtLogin ?? false
         dictationKey = stored?.dictationKey ?? .rightOption
         systemAudioInMeetings = stored?.systemAudioInMeetings ?? false
-        translateTarget = stored?.translateTarget ?? .english
+        if let stored {
+            translateTarget = stored.translateTarget
+        } else {
+            translateTarget = .english
+        }
         setupCompleted = stored?.setupCompleted ?? false
+        if speechModel == .parakeet, !language.supportsParakeet {
+            language = .automatic
+            save()
+        }
     }
 
     private func save() {
         let stored = Stored(
             language: language,
+            speechModel: speechModel,
+            pendingSpeechModel: pendingSpeechModel,
+            removePendingPredecessor: removePendingPredecessor,
             polishEnabled: polishEnabled,
             launchAtLogin: launchAtLogin,
             dictationKey: dictationKey,
@@ -240,23 +294,46 @@ final class SettingsStore {
 
     private struct Stored: Codable {
         var language: SpeechChoice
+        var speechModel: SpeechEngine?
+        var pendingSpeechModel: SpeechEngine?
+        var removePendingPredecessor: Bool?
         var polishEnabled: Bool
         var launchAtLogin: Bool
         var dictationKey: DictationKey
         var systemAudioInMeetings: Bool
-        var translateTarget: SpeechChoice
+        /// Nil is an explicit Off. A missing key stays English so older settings keep translating.
+        var translateTarget: SpeechChoice?
         var setupCompleted: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case language
+            case speechModel
+            case pendingSpeechModel
+            case removePendingPredecessor
+            case polishEnabled
+            case launchAtLogin
+            case dictationKey
+            case systemAudioInMeetings
+            case translateTarget
+            case setupCompleted
+        }
 
         init(
             language: SpeechChoice,
+            speechModel: SpeechEngine?,
+            pendingSpeechModel: SpeechEngine?,
+            removePendingPredecessor: Bool?,
             polishEnabled: Bool,
             launchAtLogin: Bool,
             dictationKey: DictationKey,
             systemAudioInMeetings: Bool,
-            translateTarget: SpeechChoice,
+            translateTarget: SpeechChoice?,
             setupCompleted: Bool?
         ) {
             self.language = language
+            self.speechModel = speechModel
+            self.pendingSpeechModel = pendingSpeechModel
+            self.removePendingPredecessor = removePendingPredecessor
             self.polishEnabled = polishEnabled
             self.launchAtLogin = launchAtLogin
             self.dictationKey = dictationKey
@@ -268,12 +345,37 @@ final class SettingsStore {
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             language = try container.decode(SpeechChoice.self, forKey: .language)
+            speechModel = try container.decodeIfPresent(SpeechEngine.self, forKey: .speechModel)
+            pendingSpeechModel = try container.decodeIfPresent(SpeechEngine.self, forKey: .pendingSpeechModel)
+            removePendingPredecessor = try container.decodeIfPresent(Bool.self, forKey: .removePendingPredecessor)
             polishEnabled = try container.decode(Bool.self, forKey: .polishEnabled)
             launchAtLogin = try container.decode(Bool.self, forKey: .launchAtLogin)
             dictationKey = try container.decode(DictationKey.self, forKey: .dictationKey)
             systemAudioInMeetings = try container.decode(Bool.self, forKey: .systemAudioInMeetings)
-            translateTarget = try container.decode(SpeechChoice.self, forKey: .translateTarget)
+            if container.contains(.translateTarget) {
+                translateTarget = try container.decodeIfPresent(SpeechChoice.self, forKey: .translateTarget)
+            } else {
+                translateTarget = .english
+            }
             setupCompleted = try container.decodeIfPresent(Bool.self, forKey: .setupCompleted)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(language, forKey: .language)
+            try container.encodeIfPresent(speechModel, forKey: .speechModel)
+            try container.encodeIfPresent(pendingSpeechModel, forKey: .pendingSpeechModel)
+            try container.encodeIfPresent(removePendingPredecessor, forKey: .removePendingPredecessor)
+            try container.encode(polishEnabled, forKey: .polishEnabled)
+            try container.encode(launchAtLogin, forKey: .launchAtLogin)
+            try container.encode(dictationKey, forKey: .dictationKey)
+            try container.encode(systemAudioInMeetings, forKey: .systemAudioInMeetings)
+            if let translateTarget {
+                try container.encode(translateTarget, forKey: .translateTarget)
+            } else {
+                try container.encodeNil(forKey: .translateTarget)
+            }
+            try container.encodeIfPresent(setupCompleted, forKey: .setupCompleted)
         }
     }
 }

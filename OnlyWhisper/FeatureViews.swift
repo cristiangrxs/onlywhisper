@@ -655,7 +655,7 @@ struct RewriteView: View {
                             symbol: action.symbol,
                             tint: action.tint,
                             title: action.title,
-                            subtitle: action == .translate ? model.settings.translateTarget.title : nil,
+                            subtitle: action == .translate ? (model.settings.translateTarget?.title ?? t("Off", "Aus")) : nil,
                             keys: ["⌘", "\(index + 1)"],
                             isSelected: !hasInstruction && index == selection
                         )

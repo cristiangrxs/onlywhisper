@@ -5,6 +5,8 @@ struct ModelInfo: Identifiable, Sendable {
     let id: ModelID
     let name: String
     let role: String
+    /// What this model is good at. Speech models share this text in setup and Settings.
+    let summary: String
     let size: String
     let symbol: String
     /// Share of a full download, used to weight progress when several models are fetched together.
@@ -12,9 +14,25 @@ struct ModelInfo: Identifiable, Sendable {
 
     static let catalog: [ModelInfo] = [
         ModelInfo(
+            id: .parakeet,
+            name: "Parakeet Ultra",
+            role: t("Speech recognition", "Spracherkennung"),
+            summary: t(
+                "Fast on this Mac. Strong for German, English, and the other European languages, with punctuation. Not for languages outside that set.",
+                "Schnell auf diesem Mac. Stark bei Deutsch, Englisch und den anderen europäischen Sprachen, mit Satzzeichen. Nicht für Sprachen außerhalb dieser Auswahl."
+            ),
+            size: "",
+            symbol: "bolt.fill",
+            progressWeight: 0.40
+        ),
+        ModelInfo(
             id: .whisper,
             name: WhisperModelChoice.displayName,
             role: t("Speech recognition", "Spracherkennung"),
+            summary: t(
+                "Many more languages, including when the language changes. A little larger and a little slower.",
+                "Viele weitere Sprachen, auch wenn die Sprache wechselt. Etwas größer und etwas langsamer."
+            ),
             size: "",
             symbol: "waveform",
             progressWeight: 0.40
@@ -23,14 +41,12 @@ struct ModelInfo: Identifiable, Sendable {
             id: .qwen,
             name: "Qwen3 4B",
             role: t("Polish and rewrite", "Glätten und Umschreiben"),
+            summary: "",
             size: "",
             symbol: "text.badge.star",
             progressWeight: 0.60
         ),
     ]
-
-    /// Models this build downloads and treats as required. Parakeet is not part of speech recognition.
-    static let requiredIDs: [ModelID] = [.whisper, .qwen]
 
     static func info(_ id: ModelID) -> ModelInfo? {
         catalog.first { $0.id == id }
@@ -61,6 +77,8 @@ final class ModelDownloadManager {
     private(set) var failedModelID: ModelID?
 
     private var installations = ModelInstallationStore()
+    /// The speech model that must be present. The other speech model can stay installed without counting as required.
+    private var speechRequirement: ModelID = .whisper
     private var activeModel: ModelID?
     /// Set only while that model's files are being fetched, so cancel can drop an unfinished download.
     private var downloadingID: ModelID?
@@ -68,6 +86,20 @@ final class ModelDownloadManager {
     private var activePortion: Double = 0
     private let downloadRun = DownloadRun()
     private var trackedDownload: Task<Void, Never>?
+
+    /// Sets which speech model counts as required, then refreshes what is missing.
+    func setSpeechRequirement(_ id: ModelID) {
+        speechRequirement = id
+    }
+
+    func useSpeechRequirement(_ id: ModelID) {
+        speechRequirement = id
+        syncCatalog()
+    }
+
+    private var requiredIDs: [ModelID] {
+        [speechRequirement, .qwen]
+    }
 
     func refreshReadyState() {
         installations = ModelInstallationStore.load(from: ModelPaths.installations)
@@ -147,6 +179,29 @@ final class ModelDownloadManager {
         trackedDownload?.cancel()
     }
 
+    /// Cancels the current transfer and waits until it has released the download slot.
+    func stop() async {
+        let task = trackedDownload
+        cancel()
+        await task?.value
+    }
+
+    /// Deletes a model directory, retrying while a cancelled transfer is still closing its files.
+    func discardDownloadedFiles(_ id: ModelID) async {
+        await discardPartialDownload(id)
+        syncCatalog()
+    }
+
+    func isTransferring(_ id: ModelID) -> Bool {
+        guard let info = ModelInfo.info(id) else { return false }
+        switch state(of: info) {
+        case .downloading, .waiting:
+            return true
+        case .ready, .updateAvailable, .missing:
+            return false
+        }
+    }
+
     func download(_ id: ModelID) async {
         guard installStatus(id) == .missing else { return }
         await track { await self.run([id], replacingOutdated: false) }
@@ -165,10 +220,17 @@ final class ModelDownloadManager {
         await track { await self.run(self.outdatedIDs, replacingOutdated: true) }
     }
 
-    /// Downloads every model that is missing or older than the build shipped with this app.
+    /// Downloads every required model that is missing or older than the build shipped with this app.
     func downloadRequiredModels() async {
-        let needed = ModelInfo.requiredIDs.filter { installStatus($0) != .current }
+        let needed = requiredIDs.filter { installStatus($0) != .current }
         await track { await self.run(needed, replacingOutdated: true) }
+    }
+
+    /// Downloads these models, including a speech model that is not the required one yet.
+    func download(_ ids: [ModelID], replacingOutdated: Bool) async {
+        let needed = ids.filter { installStatus($0) != .current }
+        guard !needed.isEmpty else { return }
+        await track { await self.run(needed, replacingOutdated: replacingOutdated) }
     }
 
     private func track(_ operation: @escaping @MainActor () async -> Void) async {
@@ -222,7 +284,7 @@ final class ModelDownloadManager {
         }
         ModelHub.offlineMode = false
         do {
-            for id in ModelInfo.requiredIDs where ids.contains(id) {
+            for id in ids {
                 if downloadRun.isCancelled { throw CancellationError() }
                 queued.remove(id)
                 activeModel = id
@@ -481,8 +543,7 @@ final class ModelDownloadManager {
     private func partialFilesRemain(_ id: ModelID) -> Bool {
         switch id {
         case .parakeet:
-            FileManager.default.fileExists(atPath: ModelPaths.parakeet.path)
-                || FileManager.default.fileExists(atPath: ModelPaths.parakeetWeights.path)
+            ModelPaths.parakeetStorageURLs.contains { FileManager.default.fileExists(atPath: $0.path) }
         case .whisper:
             FileManager.default.fileExists(atPath: ModelPaths.whisper.path)
         case .qwen:
@@ -493,8 +554,9 @@ final class ModelDownloadManager {
     private func deleteFiles(_ id: ModelID) throws {
         switch id {
         case .parakeet:
-            try removeIfPresent(ModelPaths.parakeet)
-            try removeIfPresent(ModelPaths.parakeetWeights)
+            for url in ModelPaths.parakeetStorageURLs {
+                try removeIfPresent(url)
+            }
         case .whisper:
             try removeIfPresent(ModelPaths.whisper)
         case .qwen:
@@ -508,8 +570,8 @@ final class ModelDownloadManager {
     }
 
     private func syncCatalog() {
-        missingIDs = ModelInfo.requiredIDs.filter { installStatus($0) == .missing }
-        outdatedIDs = ModelInfo.requiredIDs.filter { installStatus($0) == .outdated }
+        missingIDs = requiredIDs.filter { installStatus($0) == .missing }
+        outdatedIDs = requiredIDs.filter { installStatus($0) == .outdated }
         isReady = missingIDs.isEmpty && outdatedIDs.isEmpty
     }
 }

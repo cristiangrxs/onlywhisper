@@ -13,6 +13,10 @@ actor ParakeetEngine {
         return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    func prepare() async throws {
+        _ = try await load()
+    }
+
     func unload() {
         manager = nil
     }
