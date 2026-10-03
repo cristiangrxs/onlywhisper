@@ -1,13 +1,57 @@
 import AVFoundation
 import Foundation
 
-final class AudioRecorder: @unchecked Sendable {
-    private let engine = AVAudioEngine()
+/// Mono 16 kHz samples. Pausing rejects new audio and leaves what was already captured.
+final class SampleBuffer: @unchecked Sendable {
     private let lock = NSLock()
     private var samples: [Float] = []
+    private var accepts = true
+
+    func reset() {
+        lock.lock()
+        samples.removeAll(keepingCapacity: true)
+        accepts = true
+        lock.unlock()
+    }
+
+    func setAccepting(_ accepts: Bool) {
+        lock.lock()
+        self.accepts = accepts
+        lock.unlock()
+    }
+
+    func append(_ chunk: [Float]) {
+        guard !chunk.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        guard accepts else { return }
+        samples.append(contentsOf: chunk)
+    }
+
+    func snapshot() -> [Float] {
+        lock.lock()
+        let copy = samples
+        lock.unlock()
+        return copy
+    }
+
+    func take() -> [Float] {
+        lock.lock()
+        let copy = samples
+        samples.removeAll(keepingCapacity: false)
+        accepts = true
+        lock.unlock()
+        return copy
+    }
+}
+
+final class AudioRecorder: @unchecked Sendable {
+    private let engine = AVAudioEngine()
+    private let buffer = SampleBuffer()
     private var converter: AVAudioConverter?
     private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
     private var levelHandler: (@Sendable (Float) -> Void)?
+    private var started = false
 
     var isRunning: Bool { engine.isRunning }
 
@@ -16,12 +60,40 @@ final class AudioRecorder: @unchecked Sendable {
     }
 
     func start() throws {
+        buffer.reset()
+        started = true
+        try installAndStart()
+    }
+
+    /// Stops the microphone without dropping samples already captured.
+    func pause() {
+        guard started, engine.isRunning else { return }
+        buffer.setAccepting(false)
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+    }
+
+    func resume() throws {
+        guard started, !engine.isRunning else { return }
+        buffer.setAccepting(true)
+        try installAndStart()
+    }
+
+    func stop() -> [Float] {
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        started = false
+        return buffer.take()
+    }
+
+    func snapshot() -> [Float] {
+        buffer.snapshot()
+    }
+
+    private func installAndStart() throws {
         let input = engine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
         converter = AVAudioConverter(from: inputFormat, to: targetFormat)
-        lock.lock()
-        samples.removeAll(keepingCapacity: true)
-        lock.unlock()
         input.removeTap(onBus: 0)
         try input.installAudioTap(
             onBus: 0,
@@ -33,29 +105,6 @@ final class AudioRecorder: @unchecked Sendable {
         }
         engine.prepare()
         try engine.start()
-    }
-
-    func stop() -> [Float] {
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        lock.lock()
-        let captured = samples
-        samples.removeAll(keepingCapacity: false)
-        lock.unlock()
-        return captured
-    }
-
-    func appendSystemSamples(_ extra: [Float]) {
-        lock.lock()
-        samples.append(contentsOf: extra)
-        lock.unlock()
-    }
-
-    func snapshot() -> [Float] {
-        lock.lock()
-        let captured = samples
-        lock.unlock()
-        return captured
     }
 
     /// Apple accepts tap buffers of 100–400 ms. A fixed frame count falls outside that at 48 kHz.
@@ -84,9 +133,7 @@ final class AudioRecorder: @unchecked Sendable {
         let frames = Int(output.frameLength)
         let chunk = Array(UnsafeBufferPointer(start: channel[0], count: frames))
         let level = chunk.reduce(Float(0)) { max($0, abs($1)) }
-        lock.lock()
-        samples.append(contentsOf: chunk)
-        lock.unlock()
+        self.buffer.append(chunk)
         levelHandler?(level)
     }
 }

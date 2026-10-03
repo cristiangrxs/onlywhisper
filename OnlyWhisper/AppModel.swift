@@ -52,10 +52,23 @@ final class AppModel {
     var level: Float = 0
     var setupStep = 0
     var needsSetup = true
-    var meetingChunks: [TranscriptChunk] = []
+    var meetingTurns: [MeetingTurn] = []
     var meetingNotes: MeetingNotes?
     var meetingActive = false
+    var meetingPaused = false
+    var meetingCollapsed = false
     var meetingStatus = ""
+    var meetingScreenCaptureMissing = false
+    var meetingBrowserAudio = false
+    var meetingFullMix = false
+    /// The chosen app could not be isolated, so other apps stay silent and only the microphone is used.
+    var meetingAppAudioMissing = false
+    /// Nil records the microphone only. Set from the meeting window before or during a recording.
+    var meetingAudioApp: MeetingAudioApp?
+    private var meetingAudioChoiceTouched = false
+    var detectedMeeting: DetectedMeeting?
+    var speakerNames: [String: String] = [:]
+    private(set) var separatesLocalVoice = false
     var statusMessage = ""
     private(set) var hotkeyReady = false
     /// Bumps while a permission is still missing, so Settings updates after the user grants it.
@@ -82,6 +95,7 @@ final class AppModel {
     var settingsTabRequest: String?
 
     private let recorder = AudioRecorder()
+    private let meetingMic = AudioRecorder()
     private let systemAudio = SystemAudioCapture()
     private let hotkeys = HotkeyMonitor()
     private let speech = SpeechRouter()
@@ -91,8 +105,23 @@ final class AppModel {
     private var settingsOpener: (() -> Void)?
     private var didBootstrap = false
     private(set) var meetingStartedAt: Date?
-    private var transcribedUntil: Int = 0
-    private var meetingTimer: Task<Void, Never>?
+    private(set) var meetingElapsed: TimeInterval = 0
+    private(set) var meetingSliceStart: Date?
+    /// Bumps once a second while a meeting is recording, so the clock updates without a TimelineView.
+    var meetingNow = Date()
+    private var meetingUtterances: [MeetingUtterance] = []
+    private var meetingSpeakers: [SpeakerSpan] = []
+    private var micCursor = 0
+    private var remoteCursor = 0
+    private var diarizedCursor = 0
+    private var capturingSystem = false
+    private var meetingStopRequested = false
+    private var meetingFinishing = false
+    private(set) var meetingPreparing = false
+    private var savedMeetingID: UUID?
+    private var meetingTask: Task<Void, Never>?
+    private var meetingClockTask: Task<Void, Never>?
+    private var meetingWatch: Task<Void, Never>?
     private var dictationTask: Task<Void, Never>?
     private var finishTask: Task<Void, Never>?
     private var prewarmTask: Task<Void, Never>?
@@ -116,8 +145,11 @@ final class AppModel {
         recorder.setLevelHandler { [weak self] level in
             Task { @MainActor in self?.level = level }
         }
-        systemAudio.onSamples = { [weak self] samples in
-            self?.recorder.appendSystemSamples(samples)
+        meetingMic.setLevelHandler { [weak self] level in
+            Task { @MainActor in
+                guard let self, self.meetingActive, self.phase == .idle else { return }
+                self.level = level
+            }
         }
         hotkeys.onPress = { [weak self] in self?.dictationPressed() }
         hotkeys.onRelease = { [weak self] duration in self?.dictationReleased(after: duration) }
@@ -236,6 +268,7 @@ final class AppModel {
         }
         applyLaunchAtLogin()
         watchWindowClose()
+        watchMeetings()
     }
 
     /// Settings is a normal window. A menu-bar app stays behind other apps until it becomes a regular, active app.
@@ -280,6 +313,22 @@ final class AppModel {
         NSApp.activate()
     }
 
+    /// A fresh SwiftUI window can come up on another display. Keep it on the screen under the pointer.
+    private func placeMeetingWindowIfNeeded(_ window: NSWindow) {
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+        guard let visible = screen?.visibleFrame else { return }
+        let frame = window.frame
+        let onMouseScreen = screen?.visibleFrame.contains(NSPoint(x: frame.midX, y: frame.midY)) == true
+        let usable = frame.width > 200 && frame.height > 200 && onMouseScreen
+        guard !usable else { return }
+        let size = NSSize(width: 400, height: 560)
+        var origin = NSPoint(x: mouse.x - size.width / 2, y: mouse.y - size.height / 2)
+        origin.x = min(max(origin.x, visible.minX + 16), visible.maxX - size.width - 16)
+        origin.y = min(max(origin.y, visible.minY + 16), visible.maxY - size.height - 16)
+        window.setFrame(NSRect(origin: origin, size: size), display: true)
+    }
+
     private func watchWindowClose() {
         guard !watchesWindowClose else { return }
         watchesWindowClose = true
@@ -291,7 +340,8 @@ final class AppModel {
             let closingNumber = (notification.object as? NSWindow)?.windowNumber
             Task { @MainActor in
                 let stillOpen = NSApp.windows.contains { window in
-                    window.windowNumber != closingNumber && window.isVisible && window.canBecomeMain && !(window is NSPanel)
+                    guard window.windowNumber != closingNumber, window.isVisible else { return false }
+                    return window.canBecomeMain
                 }
                 if !stillOpen {
                     NSApp.setActivationPolicy(.accessory)
@@ -420,8 +470,47 @@ final class AppModel {
     }
 
     func open(_ id: String) {
+        if id == "meeting" {
+            presentMeetingWindow()
+            return
+        }
         opener?(id)
         orderFront { $0.identifier?.rawValue.hasPrefix(id) == true && $0.isVisible }
+    }
+
+    private var meetingOpenTask: Task<Void, Never>?
+
+    /// The status item is still tracking the click. Activating or making a window key in that
+    /// moment wedges the SwiftUI menu bar, so this only orders the window forward.
+    private func presentMeetingWindow() {
+        meetingOpenTask?.cancel()
+        meetingOpenTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(280))
+            guard !Task.isCancelled else { return }
+            opener?("meeting")
+            for _ in 0..<12 {
+                guard let window = NSApp.windows.first(where: {
+                    $0.identifier?.rawValue.hasPrefix("meeting") == true
+                }) else {
+                    try? await Task.sleep(for: .milliseconds(40))
+                    continue
+                }
+                showMeetingWindow(window)
+                return
+            }
+        }
+    }
+
+    private func showMeetingWindow(_ window: NSWindow) {
+        window.level = .normal
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        window.hidesOnDeactivate = false
+        placeMeetingWindowIfNeeded(window)
+        NSApp.setActivationPolicy(.regular)
+        NSApp.unhide(nil)
+        window.orderFrontRegardless()
+        window.makeKey()
+        NSApp.activate()
     }
 
     var microphoneGranted: Bool {
@@ -1114,7 +1203,9 @@ final class AppModel {
             let samples = recorder.stop()
             phase = .idle
             let spoken = try await speech.transcribe(samples: samples, choice: settings.language, dictation: true)
-            await speech.unload()
+            if !meetingActive {
+                await speech.unload()
+            }
             rewriteInstruction = spoken
         } catch {
             statusMessage = error.localizedDescription
@@ -1141,45 +1232,127 @@ final class AppModel {
         }
     }
 
+    func showMeeting() {
+        presentMeetingWindow()
+    }
+
     func startMeeting() async {
+        guard !meetingActive, !meetingFinishing, !meetingPreparing else {
+            showMeeting()
+            return
+        }
+        meetingPreparing = true
+        defer { meetingPreparing = false }
+        if !microphoneGranted {
+            await requestMicrophone()
+            guard microphoneGranted else {
+                meetingStatus = t("Microphone access is off", "Mikrofonzugriff ist aus")
+                showMeeting()
+                return
+            }
+        }
         guard requireUsableModel(speechModel) else { return }
-        meetingNotes = nil
-        meetingChunks = []
-        transcribedUntil = 0
-        meetingStatus = t("Preparing speakers", "Sprecher werden vorbereitet")
+        resetMeetingCapture()
+        prepareMeetingAudioChoice()
+        meetingStatus = t("Preparing…", "Wird vorbereitet…")
+        showMeeting()
+        let call = MeetingDetector.current()
+        detectedMeeting = call
+        let choice = meetingAudioApp
+        separatesLocalVoice = choice != nil
+        meetingBrowserAudio = choice?.browser == true
         do {
             try await diarizer.prepare()
-            try recorder.start()
-            if settings.systemAudioInMeetings {
-                if !CGPreflightScreenCaptureAccess() {
-                    _ = CGRequestScreenCaptureAccess()
-                }
-                try? await systemAudio.start()
+            await diarizer.begin()
+            try await speech.prepare()
+            try meetingMic.start()
+            if let choice {
+                let ids = MeetingDetector.captureBundleIDs(for: choice.bundleID, running: Self.runningBundleIDs())
+                await startMeetingSystemAudio(bundleIDs: ids)
             }
             meetingStartedAt = .now
+            meetingSliceStart = .now
+            meetingElapsed = 0
             meetingActive = true
+            meetingPaused = false
+            startMeetingClock()
             meetingStatus = t("Listening", "Hört zu")
-            meetingTimer = Task { await pollMeeting() }
+            meetingTask = Task { await runMeetingLoop() }
+        } catch {
+            _ = meetingMic.stop()
+            _ = systemAudio.stop()
+            capturingSystem = false
+            meetingStatus = error.localizedDescription
+        }
+    }
+
+    func pauseMeeting() {
+        guard meetingActive, !meetingPaused, !meetingFinishing else { return }
+        if let meetingSliceStart {
+            meetingElapsed += Date().timeIntervalSince(meetingSliceStart)
+        }
+        meetingSliceStart = nil
+        meetingPaused = true
+        stopMeetingClock()
+        meetingMic.pause()
+        if capturingSystem {
+            systemAudio.pause()
+        }
+        meetingStatus = t("Paused", "Pausiert")
+    }
+
+    func resumeMeeting() async {
+        guard meetingActive, meetingPaused, !meetingFinishing else { return }
+        do {
+            try meetingMic.resume()
+            if capturingSystem {
+                try await systemAudio.resume()
+            }
+            meetingPaused = false
+            meetingSliceStart = .now
+            startMeetingClock()
+            meetingStatus = t("Listening", "Hört zu")
         } catch {
             meetingStatus = error.localizedDescription
         }
     }
 
     func stopMeeting() async {
-        meetingTimer?.cancel()
-        meetingTimer = nil
-        systemAudio.stop()
-        let samples = recorder.stop()
+        guard meetingActive, !meetingFinishing else { return }
+        meetingFinishing = true
+        meetingStopRequested = true
+        meetingTask?.cancel()
+        await meetingTask?.value
+        meetingTask = nil
+        if !meetingPaused, let meetingSliceStart {
+            meetingElapsed += Date().timeIntervalSince(meetingSliceStart)
+        }
+        meetingSliceStart = nil
         meetingActive = false
+        meetingPaused = false
+        stopMeetingClock()
+        if meetingCollapsed {
+            meetingCollapsed = false
+            applyMeetingChrome()
+        }
         meetingStatus = t("Wrapping up", "Wird zusammengefasst")
+        let mic = meetingMic.stop()
+        let remote = capturingSystem ? systemAudio.stop() : []
+        capturingSystem = false
         do {
-            await appendMeetingChunk(samples: samples, fullCount: samples.count)
-            meetingChunks = try await diarizer.assignSpeakers(to: meetingChunks, samples: samples)
-            await speech.unload()
-            let transcript = meetingChunks.map { chunk in
-                let speaker = chunk.speaker.map { "\($0): " } ?? ""
-                return speaker + chunk.text
-            }.joined(separator: "\n")
+            micCursor = await transcribe(samples: mic, from: micCursor, track: .local, forceTail: true)
+            if separatesLocalVoice {
+                remoteCursor = await transcribe(samples: remote, from: remoteCursor, track: .remote, forceTail: true)
+                diarizedCursor = await ingestSpeakers(samples: remote, from: diarizedCursor, finishing: true)
+            } else {
+                diarizedCursor = await ingestSpeakers(samples: mic, from: diarizedCursor, finishing: true)
+            }
+            rebuildTurns()
+            let transcript = MeetingMerger.plainTranscript(
+                turns: meetingTurns,
+                names: speakerNames,
+                separatesLocalVoice: separatesLocalVoice
+            )
             if settings.polishEnabled, downloads.isUsable(.qwen), !transcript.isEmpty {
                 let polisher = qwen
                 let reply = try await AsyncDeadline.value(ModelDeadline.polish) {
@@ -1188,40 +1361,314 @@ final class AppModel {
                 await qwen.unload()
                 meetingNotes = Self.parseNotes(reply)
             }
-            history.add(source: "meeting", raw: transcript, polished: meetingNotes?.summary ?? transcript)
+            if !transcript.isEmpty {
+                savedMeetingID = history.add(
+                    source: "meeting",
+                    title: detectedMeeting?.kind.localizedName,
+                    raw: transcript,
+                    polished: meetingNotes?.summary ?? transcript,
+                    meeting: currentRecord()
+                )
+            }
             meetingStatus = t("Done", "Fertig")
         } catch {
             meetingStatus = error.localizedDescription
         }
-    }
-
-    private func pollMeeting() async {
-        while meetingActive, !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(8))
-            guard meetingActive else { return }
-            let samples = recorder.snapshot()
-            await appendMeetingChunk(samples: samples, fullCount: samples.count)
+        meetingFinishing = false
+        meetingStopRequested = false
+        if phase == .idle {
+            await speech.unload()
         }
     }
 
-    private func appendMeetingChunk(samples: [Float], fullCount: Int) async {
-        guard fullCount - transcribedUntil > 16_000 else { return }
-        let start = transcribedUntil
-        let slice = Array(samples[start..<fullCount])
-        transcribedUntil = fullCount
-        let startTime = Double(start) / 16_000
-        let endTime = Double(fullCount) / 16_000
-        do {
-            let router = speech
-            let choice = settings.language
-            let text = try await AsyncDeadline.value(ModelDeadline.finalTranscription) {
-                try await router.transcribe(samples: slice, choice: choice)
+    private func startMeetingClock() {
+        meetingClockTask?.cancel()
+        meetingNow = Date()
+        meetingClockTask = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                meetingNow = Date()
             }
-            guard !text.isEmpty else { return }
-            meetingChunks.append(TranscriptChunk(start: startTime, end: endTime, text: text, speaker: nil))
-        } catch {
-            meetingStatus = error.localizedDescription
         }
+    }
+
+    private func stopMeetingClock() {
+        meetingClockTask?.cancel()
+        meetingClockTask = nil
+    }
+
+    func toggleMeetingCollapsed() {
+        meetingCollapsed.toggle()
+        applyMeetingChrome()
+    }
+
+    private var meetingExpandedFrame: NSRect?
+
+    private func applyMeetingChrome() {
+        guard let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("meeting") == true }) else { return }
+        if meetingCollapsed {
+            if window.frame.height > 120 {
+                meetingExpandedFrame = window.frame
+            }
+            window.contentMinSize = NSSize(width: 280, height: 64)
+            var frame = window.frame
+            let height: CGFloat = 72
+            frame.origin.y += frame.height - height
+            frame.size.height = height
+            window.setFrame(frame, display: true, animate: true)
+        } else {
+            window.contentMinSize = NSSize(width: 340, height: 420)
+            let saved = meetingExpandedFrame ?? window.frame
+            let height = saved.height > 200 ? saved.height : 560
+            var frame = window.frame
+            frame.origin.y += frame.height - height
+            frame.size.height = height
+            window.setFrame(frame, display: true, animate: true)
+        }
+    }
+
+    func renameMeetingSpeaker(_ id: String, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        speakerNames[id] = trimmed
+        rebuildTurns()
+        guard let savedMeetingID else { return }
+        let transcript = MeetingMerger.plainTranscript(
+            turns: meetingTurns,
+            names: speakerNames,
+            separatesLocalVoice: separatesLocalVoice
+        )
+        history.updateMeeting(
+            savedMeetingID,
+            raw: transcript,
+            polished: meetingNotes?.summary ?? transcript,
+            meeting: currentRecord()
+        )
+    }
+
+    func meetingTranscript() -> String {
+        MeetingMerger.document(
+            turns: meetingTurns,
+            names: speakerNames,
+            separatesLocalVoice: separatesLocalVoice,
+            notes: meetingNotes
+        )
+    }
+
+    private func watchMeetings() {
+        guard meetingWatch == nil else { return }
+        meetingWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                if !self.meetingActive {
+                    let found = MeetingDetector.current()
+                    if found != self.detectedMeeting {
+                        self.detectedMeeting = found
+                    }
+                }
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+
+    private func resetMeetingCapture() {
+        meetingTurns = []
+        meetingNotes = nil
+        meetingUtterances = []
+        meetingSpeakers = []
+        speakerNames = [:]
+        micCursor = 0
+        remoteCursor = 0
+        diarizedCursor = 0
+        savedMeetingID = nil
+        meetingScreenCaptureMissing = false
+        meetingBrowserAudio = false
+        meetingFullMix = false
+        meetingAppAudioMissing = false
+        meetingCollapsed = false
+        capturingSystem = false
+        meetingStopRequested = false
+    }
+
+    func prepareMeetingAudioChoice() {
+        guard !meetingAudioChoiceTouched else { return }
+        let apps = MeetingDetector.openApps()
+        if let live = MeetingDetector.current(),
+           let match = apps.first(where: { app in
+               live.bundleIDs.contains(app.bundleID) || live.bundleIDs.contains { MeetingDetector.sameAudioFamily(app.bundleID, $0) }
+           }) {
+            meetingAudioApp = match
+            return
+        }
+        meetingAudioApp = apps.first(where: \.suggested)
+    }
+
+    func selectMeetingAudio(_ app: MeetingAudioApp?) {
+        meetingAudioChoiceTouched = true
+        meetingAudioApp = app
+        guard meetingActive, !meetingFinishing, !meetingPreparing else { return }
+        meetingAudioRetarget?.cancel()
+        meetingAudioRetarget = Task { await retargetMeetingAudio() }
+    }
+
+    private var meetingAudioRetarget: Task<Void, Never>?
+
+    private func retargetMeetingAudio() async {
+        let choice = meetingAudioApp
+        let tail = capturingSystem ? systemAudio.stop() : []
+        capturingSystem = false
+        if separatesLocalVoice, !tail.isEmpty {
+            remoteCursor = await transcribe(samples: tail, from: remoteCursor, track: .remote, forceTail: true)
+            diarizedCursor = await ingestSpeakers(samples: tail, from: diarizedCursor, finishing: false)
+        }
+        guard !Task.isCancelled else { return }
+        remoteCursor = 0
+        diarizedCursor = 0
+        meetingAppAudioMissing = false
+        meetingFullMix = false
+        separatesLocalVoice = choice != nil
+        meetingBrowserAudio = choice?.browser == true
+        if let choice {
+            let ids = MeetingDetector.captureBundleIDs(for: choice.bundleID, running: Self.runningBundleIDs())
+            await startMeetingSystemAudio(bundleIDs: ids)
+        }
+        rebuildTurns()
+    }
+
+    private static func runningBundleIDs() -> [String] {
+        NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier)
+    }
+
+    private func startMeetingSystemAudio(bundleIDs: [String]) async {
+        guard CGPreflightScreenCaptureAccess() else {
+            _ = CGRequestScreenCaptureAccess()
+            meetingScreenCaptureMissing = true
+            separatesLocalVoice = false
+            return
+        }
+        do {
+            try await systemAudio.start(including: bundleIDs)
+            capturingSystem = true
+            meetingFullMix = false
+            meetingAppAudioMissing = false
+        } catch SystemAudioCaptureError.appNotShareable {
+            _ = systemAudio.stop()
+            meetingAppAudioMissing = true
+            meetingBrowserAudio = false
+            meetingFullMix = false
+            separatesLocalVoice = false
+            capturingSystem = false
+        } catch {
+            _ = systemAudio.stop()
+            meetingScreenCaptureMissing = true
+            separatesLocalVoice = false
+            capturingSystem = false
+        }
+    }
+
+    private func runMeetingLoop() async {
+        let cap = 12 * SpeechPause.sampleRate
+        while meetingActive, !meetingStopRequested, !Task.isCancelled {
+            if meetingPaused {
+                try? await Task.sleep(for: .milliseconds(200))
+                continue
+            }
+            let mic = meetingMic.snapshot()
+            let remote = capturingSystem ? systemAudio.snapshot() : []
+            micCursor = await transcribe(samples: mic, from: micCursor, track: .local, forceTail: false, maxSegment: cap)
+            if separatesLocalVoice, capturingSystem {
+                remoteCursor = await transcribe(samples: remote, from: remoteCursor, track: .remote, forceTail: false, maxSegment: cap)
+                diarizedCursor = await ingestSpeakers(samples: remote, from: diarizedCursor, finishing: false)
+            } else {
+                diarizedCursor = await ingestSpeakers(samples: mic, from: diarizedCursor, finishing: false)
+            }
+            rebuildTurns()
+            if meetingStopRequested || Task.isCancelled { return }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+    }
+
+    @discardableResult
+    private func transcribe(
+        samples: [Float],
+        from cursor: Int,
+        track: SpeechTrack,
+        forceTail: Bool,
+        maxSegment: Int = 12 * SpeechPause.sampleRate
+    ) async -> Int {
+        var cursor = cursor
+        while cursor < samples.count && (!meetingStopRequested || forceTail) {
+            let cut = SpeechPause.settlePoint(in: samples, from: cursor, to: samples.count, maxSegment: maxSegment)
+            let stop = cut ?? (forceTail ? samples.count : nil)
+            guard let stop, stop > cursor else { break }
+            let slice = Array(samples[cursor..<stop])
+            guard let bounds = SpeechPresence.speechBounds(in: slice, from: 0, to: slice.count) else {
+                cursor = stop
+                if cut == nil { break }
+                continue
+            }
+            let heard: String
+            do {
+                let router = speech
+                let choice = settings.language
+                heard = try await AsyncDeadline.value(ModelDeadline.finalTranscription) {
+                    try await router.transcribe(samples: Array(slice[bounds.start..<bounds.end]), choice: choice)
+                }
+            } catch {
+                if !meetingStopRequested {
+                    meetingStatus = error.localizedDescription
+                }
+                break
+            }
+            let start = Double(cursor + bounds.start) / 16_000
+            let end = Double(cursor + bounds.end) / 16_000
+            cursor = stop
+            if !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                meetingUtterances.append(MeetingUtterance(start: start, end: end, text: heard, track: track))
+                rebuildTurns()
+            }
+            if cut == nil { break }
+        }
+        return cursor
+    }
+
+    @discardableResult
+    private func ingestSpeakers(samples: [Float], from cursor: Int, finishing: Bool) async -> Int {
+        let pending = cursor < samples.count ? Array(samples[cursor..<samples.count]) : []
+        if pending.isEmpty, !finishing { return cursor }
+        do {
+            if !pending.isEmpty {
+                meetingSpeakers = try await diarizer.ingest(pending)
+            }
+            if finishing {
+                meetingSpeakers = try await diarizer.finish()
+            }
+            return samples.count
+        } catch {
+            if !meetingStopRequested {
+                meetingStatus = error.localizedDescription
+            }
+            return cursor
+        }
+    }
+
+    private func rebuildTurns() {
+        meetingTurns = MeetingMerger.turns(
+            utterances: meetingUtterances,
+            speakers: meetingSpeakers,
+            separatesLocalVoice: separatesLocalVoice
+        )
+    }
+
+    private func currentRecord() -> MeetingRecord {
+        MeetingRecord(
+            duration: meetingElapsed,
+            turns: meetingTurns,
+            notes: meetingNotes,
+            names: speakerNames,
+            separatesLocalVoice: separatesLocalVoice
+        )
     }
 
     private static func parseNotes(_ reply: String) -> MeetingNotes {

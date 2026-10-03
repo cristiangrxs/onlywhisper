@@ -13,14 +13,25 @@ struct HistoryEntry: Codable, Identifiable, Equatable, Sendable {
     var title: String?
     var raw: String
     var polished: String
+    /// Structured speaker turns for a meeting. Older entries leave this empty.
+    var meeting: MeetingRecord?
 
-    init(id: UUID = UUID(), date: Date = .now, source: String, title: String? = nil, raw: String, polished: String) {
+    init(
+        id: UUID = UUID(),
+        date: Date = .now,
+        source: String,
+        title: String? = nil,
+        raw: String,
+        polished: String,
+        meeting: MeetingRecord? = nil
+    ) {
         self.id = id
         self.date = date
         self.source = source
         self.title = title
         self.raw = raw
         self.polished = polished
+        self.meeting = meeting
     }
 
     /// Filename for a file transcript, otherwise the first line of the text.
@@ -48,14 +59,22 @@ final class HistoryStore {
     }
 
     @discardableResult
-    func add(source: String, title: String? = nil, raw: String, polished: String) -> UUID {
-        let entry = HistoryEntry(source: source, title: title, raw: raw, polished: polished)
+    func add(source: String, title: String? = nil, raw: String, polished: String, meeting: MeetingRecord? = nil) -> UUID {
+        let entry = HistoryEntry(source: source, title: title, raw: raw, polished: polished, meeting: meeting)
         entries.insert(entry, at: 0)
         if entries.count > 200 {
             entries.removeLast(entries.count - 200)
         }
         save()
         return entry.id
+    }
+
+    func updateMeeting(_ id: UUID, raw: String, polished: String, meeting: MeetingRecord) {
+        guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[index].raw = raw
+        entries[index].polished = polished
+        entries[index].meeting = meeting
+        save()
     }
 
     func remove(_ entry: HistoryEntry) {

@@ -1,20 +1,6 @@
 import FluidAudio
 import Foundation
 
-struct TranscriptChunk: Identifiable, Equatable, Sendable {
-    var id = UUID()
-    var start: TimeInterval
-    var end: TimeInterval
-    var text: String
-    var speaker: String?
-}
-
-struct MeetingNotes: Codable, Equatable, Sendable {
-    var summary: String
-    var decisions: [String]
-    var tasks: [String]
-}
-
 actor MeetingDiarizer {
     private var diarizer: LSEENDDiarizer?
 
@@ -31,27 +17,47 @@ actor MeetingDiarizer {
         diarizer = created
     }
 
-    func assignSpeakers(to chunks: [TranscriptChunk], samples: [Float]) throws -> [TranscriptChunk] {
-        guard let diarizer else { return chunks }
-        let timeline = try diarizer.processComplete(samples, sourceSampleRate: 16_000)
-        var labeled = chunks
-        for index in labeled.indices {
-            let chunk = labeled[index]
-            var bestSpeaker: String?
-            var bestOverlap: TimeInterval = 0
-            for speaker in timeline.speakers.values {
-                for segment in speaker.finalizedSegments {
-                    let start = TimeInterval(segment.startTime)
-                    let end = TimeInterval(segment.endTime)
-                    let overlap = min(chunk.end, end) - max(chunk.start, start)
-                    if overlap > bestOverlap {
-                        bestOverlap = overlap
-                        bestSpeaker = speaker.name ?? segment.speakerLabel
-                    }
-                }
-            }
-            labeled[index].speaker = bestSpeaker
+    func begin() {
+        diarizer?.reset()
+    }
+
+    /// Feeds newly captured audio and returns the whole speaker timeline, including tentative labels.
+    func ingest(_ samples: [Float]) throws -> [SpeakerSpan] {
+        guard let diarizer else { return [] }
+        if !samples.isEmpty {
+            try diarizer.addAudio(samples, sourceSampleRate: 16_000)
+            _ = try diarizer.process()
         }
-        return labeled
+        return spans(from: diarizer)
+    }
+
+    func finish() throws -> [SpeakerSpan] {
+        guard let diarizer else { return [] }
+        _ = try diarizer.finalizeSession()
+        return spans(from: diarizer)
+    }
+
+    private func spans(from diarizer: LSEENDDiarizer) -> [SpeakerSpan] {
+        var result: [SpeakerSpan] = []
+        for (index, speaker) in diarizer.timeline.speakers {
+            let id = "s-\(index)"
+            for segment in speaker.finalizedSegments where segment.endTime > segment.startTime {
+                result.append(SpeakerSpan(
+                    id: id,
+                    start: TimeInterval(segment.startTime),
+                    end: TimeInterval(segment.endTime),
+                    finalized: true
+                ))
+            }
+            for segment in speaker.tentativeSegments where segment.endTime > segment.startTime {
+                result.append(SpeakerSpan(
+                    id: id,
+                    start: TimeInterval(segment.startTime),
+                    end: TimeInterval(segment.endTime),
+                    finalized: false
+                ))
+            }
+        }
+        return result
     }
 }
