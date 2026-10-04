@@ -931,22 +931,31 @@ private struct Waveform: View {
     var level: Float
     var animated: Bool
     private static let weights: [CGFloat] = [0.45, 0.75, 1, 0.85, 0.6, 0.9, 0.5]
+    /// Peaks under this are room tone, not speech.
+    private static let noiseFloor: CGFloat = 0.02
 
     var body: some View {
-        HStack(alignment: .center, spacing: 3) {
-            ForEach(Self.weights.indices, id: \.self) { index in
-                Capsule()
-                    .fill(.primary.opacity(0.85))
-                    .frame(width: 3, height: height(for: index))
+        TimelineView(.animation(minimumInterval: animated ? 1.0 / 30.0 : nil, paused: !animated)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            HStack(alignment: .center, spacing: 3) {
+                ForEach(Self.weights.indices, id: \.self) { index in
+                    Capsule()
+                        .fill(.primary.opacity(0.85))
+                        .frame(width: 3, height: 22)
+                        .scaleEffect(y: scale(for: index, time: time), anchor: .center)
+                }
             }
         }
-        .animation(animated ? .smooth(duration: 0.12) : nil, value: level)
     }
 
-    private func height(for index: Int) -> CGFloat {
-        guard animated else { return 6 }
-        let boosted = min(1, CGFloat(level) * 1.6)
-        let wobble = 0.75 + 0.25 * abs(sin(Double(index) * 1.7 + Double(level) * 12))
-        return 4 + 18 * boosted * Self.weights[index] * CGFloat(wobble)
+    /// Quiet speech fills the 22 pt frame; a shout clamps at 1. Silence only breathes.
+    private func scale(for index: Int, time: TimeInterval) -> CGFloat {
+        guard animated else { return 0.28 }
+        let raw = CGFloat(level)
+        let speech = raw > Self.noiseFloor ? min(1, (raw - Self.noiseFloor) * 8) : 0
+        let shaped = pow(speech, 0.65)
+        let idle = 0.22 + 0.08 * abs(sin(time * 2.2 + Double(index) * 0.7))
+        let voice = shaped * Self.weights[index] * (0.35 + 0.65 * abs(sin(time * 9 + Double(index) * 1.15)))
+        return min(1, idle + voice * 0.85)
     }
 }
