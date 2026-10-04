@@ -1,16 +1,23 @@
 # OnlyWhisper
 
-[onlywhisper.dev](https://onlywhisper.dev)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/cristiangrxs/onlywhisper-landingpage/main/media/command-palette.png" alt="OnlyWhisper command palette">
+</p>
+
+<p align="center">
+  <a href="https://github.com/cristiangrxs/onlywhisper/releases/latest"><img src="https://img.shields.io/github/v/release/cristiangrxs/onlywhisper?style=flat-square" alt="Latest release"></a>
+  <a href="https://onlywhisper.dev"><img src="https://img.shields.io/badge/macOS-27-0A84FF?style=flat-square&logo=apple&logoColor=white" alt="macOS 27"></a>
+  <img src="https://img.shields.io/badge/Apple%20silicon-only-black?style=flat-square" alt="Apple silicon">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" alt="License: Apache-2.0"></a>
+</p>
 
 Dictation for the Mac menu bar. Audio stays on the Mac.
 
 Hold the right Option key, speak, and the text lands in the field you are using. A tap of the same key dictates hands-free.
 
-![Command palette](docs/media/command-palette.png)
+https://github.com/user-attachments/assets/c6df423b-4328-41cf-9886-39abaa23691f
 
-[![Dictating into a note](docs/media/dictation.png)](docs/media/dictation.mp4)
-
-![The sentence after it lands](docs/media/inserted.png)
+![The sentence after it lands](https://raw.githubusercontent.com/cristiangrxs/onlywhisper-landingpage/main/media/inserted.png)
 
 ## What it does
 
