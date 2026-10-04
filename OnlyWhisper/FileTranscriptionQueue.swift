@@ -8,6 +8,7 @@ protocol FileSpeechTranscribing: Sendable {
 enum FileJobState: Equatable, Sendable {
     case waiting
     case working
+    case translating
     case done
     case failed(String)
 
@@ -15,6 +16,7 @@ enum FileJobState: Equatable, Sendable {
         switch self {
         case .waiting: t("Waiting", "Wartet")
         case .working: t("Transcribing", "Schreibt mit")
+        case .translating: t("Translating", "Wird übersetzt")
         case .done: t("Done", "Fertig")
         case .failed: t("Failed", "Fehler")
         }
@@ -23,7 +25,7 @@ enum FileJobState: Equatable, Sendable {
     var isFinished: Bool {
         switch self {
         case .done, .failed: true
-        case .waiting, .working: false
+        case .waiting, .working, .translating: false
         }
     }
 
@@ -54,6 +56,10 @@ final class FileTranscriptionQueue {
     private var scopes: [ScopedAccess] = []
     /// Saves a finished transcript where dictation is saved and returns that history entry.
     var record: ((URL, String) -> UUID)?
+    /// Replaces a finished transcript before it is saved. Nil keeps the spoken text.
+    var refine: (@MainActor (String) async -> String)?
+    /// Runs once the queue is empty and the speech model has been unloaded.
+    var onDrainFinished: (@MainActor () async -> Void)?
 
     var hasFinishedJobs: Bool {
         jobs.contains { $0.state.isFinished }
@@ -150,7 +156,10 @@ final class FileTranscriptionQueue {
                 await transcribeJob(at: index)
             }
             await speech?.unloadFileModel()
-            if !jobs.contains(where: { $0.state == .waiting }) { break }
+            if jobs.contains(where: { $0.state == .waiting }) { continue }
+            await onDrainFinished?()
+            if jobs.contains(where: { $0.state == .waiting }) { continue }
+            break
         }
         isDraining = false
     }
@@ -203,12 +212,23 @@ final class FileTranscriptionQueue {
             finish(id, .failed(FileTranscriptionCopy.noSpeech))
             return
         }
+        let delivered = await refined(trimmed, id: id)
 
-        let historyID = record?(url, trimmed)
+        let historyID = record?(url, delivered)
         guard let current = jobs.firstIndex(where: { $0.id == id }) else { return }
-        jobs[current].transcript = trimmed
+        jobs[current].transcript = delivered
         jobs[current].historyID = historyID
         jobs[current].state = .done
+    }
+
+    /// Shows translation only when a refiner is set. An empty result keeps the spoken transcript.
+    private func refined(_ transcript: String, id: FileJob.ID) async -> String {
+        guard let refine else { return transcript }
+        if let current = jobs.firstIndex(where: { $0.id == id }) {
+            jobs[current].state = .translating
+        }
+        let revised = await refine(transcript).trimmingCharacters(in: .whitespacesAndNewlines)
+        return revised.isEmpty ? transcript : revised
     }
 
     private func finish(_ id: FileJob.ID, _ state: FileJobState) {
@@ -220,7 +240,7 @@ final class FileTranscriptionQueue {
         let path = url.standardizedFileURL.path
         return jobs.contains { job in
             switch job.state {
-            case .waiting, .working:
+            case .waiting, .working, .translating:
                 return job.url.standardizedFileURL.path == path
             case .done, .failed:
                 return false

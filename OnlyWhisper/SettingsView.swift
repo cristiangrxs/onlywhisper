@@ -235,13 +235,13 @@ private struct LanguageSettings: View {
     private var languageNote: String {
         if model.settings.speechModel == .parakeet {
             return t(
-                "Parakeet covers German, English, and the other European languages. Automatic stays inside that set. Off leaves text untranslated.",
-                "Parakeet kann Deutsch, Englisch und die anderen europäischen Sprachen. Automatisch bleibt in dieser Auswahl. Aus lässt den Text unübersetzt."
+                "Parakeet covers German, English, and the other European languages. Automatic stays inside that set. Translation runs on this Mac after you let go. Off leaves text untranslated.",
+                "Parakeet kann Deutsch, Englisch und die anderen europäischen Sprachen. Automatisch bleibt in dieser Auswahl. Die Übersetzung macht das Schreibmodell auf diesem Mac nach dem Loslassen. Aus lässt den Text unübersetzt."
             )
         }
         return t(
-            "Automatic detects the spoken language. A fixed choice is faster and more accurate. Off leaves text untranslated.",
-            "Automatisch erkennt die gesprochene Sprache. Eine feste Wahl ist schneller und genauer. Aus lässt den Text unübersetzt."
+            "Whisper transcribes. Translation runs on this Mac after you let go. Off leaves text untranslated.",
+            "Whisper schreibt mit. Die Übersetzung macht das Schreibmodell auf diesem Mac nach dem Loslassen. Aus lässt den Text unübersetzt."
         )
     }
 }
@@ -269,8 +269,7 @@ private enum LanguageRow: Hashable, Identifiable {
         case .off:
             title.localizedStandardContains(needle) || needle.caseInsensitiveCompare("off") == .orderedSame
         case .language(let choice):
-            choice.title.localizedStandardContains(needle)
-                || choice.code?.caseInsensitiveCompare(needle) == .orderedSame
+            choice.matches(needle)
         }
     }
 }

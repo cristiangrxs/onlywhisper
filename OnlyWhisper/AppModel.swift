@@ -271,6 +271,10 @@ final class AppModel {
                 polished: text
             )
         }
+        files.onDrainFinished = { [weak self] in
+            guard let self, self.phase == .idle, !self.meetingActive, !self.meetingFinishing else { return }
+            await self.qwen.unload()
+        }
     }
 
     /// History row to reveal when the History window opens. A new token selects the same entry again.
@@ -454,12 +458,16 @@ final class AppModel {
             showOverlayHint(reason, milliseconds: 2800)
             return
         }
+        prepareFileTranslation()
         files.enqueue(urls, speech: speech, language: settings.language)
+        noteMissingFileTranslator()
     }
 
     func retryFile(_ id: FileJob.ID) {
         guard requireUsableModel(speechModel) else { return }
+        prepareFileTranslation()
         files.retry(id, speech: speech, language: settings.language)
+        noteMissingFileTranslator()
     }
 
     func clearFinishedFiles() {
@@ -841,8 +849,57 @@ final class AppModel {
 
     private func prewarmPolisherIfNeeded() {
         cancelPrewarm()
-        guard settings.polishEnabled, downloads.isUsable(.qwen) else { return }
+        let post = DictationPostprocess.step(
+            polish: settings.polishEnabled,
+            spoken: settings.language,
+            target: settings.translateTarget
+        )
+        guard post.usesWritingModel, downloads.isUsable(.qwen) else { return }
         prewarmTask = Task { await qwen.prewarm() }
+    }
+
+    /// Translation for files uses the same language settings as dictation, without polishing.
+    private func prepareFileTranslation() {
+        let post = DictationPostprocess.step(
+            polish: false,
+            spoken: settings.language,
+            target: settings.translateTarget
+        )
+        guard post.translates, let kind = post.polishKind else {
+            files.refine = nil
+            return
+        }
+        guard downloads.isUsable(.qwen) else {
+            files.refine = nil
+            return
+        }
+        files.refine = { [weak self] text in
+            guard let self else { return text }
+            do {
+                let outcome = try await self.refineWithModel(text, kind: kind)
+                if outcome.fellBack {
+                    self.files.notice = DictationPostprocess.fileTranslationKept
+                }
+                return outcome.text
+            } catch {
+                self.files.notice = DictationPostprocess.fileTranslationKept
+                return text
+            }
+        }
+    }
+
+    /// Enqueue clears notices, so a missing writing model is reported after the files are queued.
+    private func noteMissingFileTranslator() {
+        let post = DictationPostprocess.step(
+            polish: false,
+            spoken: settings.language,
+            target: settings.translateTarget
+        )
+        let queued = files.jobs.contains {
+            $0.state == .waiting || $0.state == .working || $0.state == .translating
+        }
+        guard files.notice == nil, post.translates, queued, !downloads.isUsable(.qwen) else { return }
+        files.notice = DictationPostprocess.fileTranslationKept
     }
 
     func startHandsFree() {
@@ -1301,15 +1358,24 @@ final class AppModel {
             let raw = dictationSession.text
             var finished = ruled(raw)
             var fellBack = false
-            if settings.polishEnabled, downloads.isUsable(.qwen), !finished.isEmpty {
-                phase = .working(t("Polishing…", "Poliert…"))
-                isSmoothing = true
-                let outcome = try await polishDictation(finished)
-                isSmoothing = false
-                try Task.checkCancellation()
-                guard epoch == dictationEpoch else { throw CancellationError() }
-                finished = outcome.text
-                fellBack = outcome.fellBack
+            let post = DictationPostprocess.step(
+                polish: settings.polishEnabled,
+                spoken: settings.language,
+                target: settings.translateTarget
+            )
+            if post.usesWritingModel, !finished.isEmpty {
+                if downloads.isUsable(.qwen), let kind = post.polishKind {
+                    phase = .working(post.workingTitle)
+                    isSmoothing = true
+                    let outcome = try await refineWithModel(finished, kind: kind)
+                    isSmoothing = false
+                    try Task.checkCancellation()
+                    guard epoch == dictationEpoch else { throw CancellationError() }
+                    finished = outcome.text
+                    fellBack = outcome.fellBack
+                } else if post.translates {
+                    fellBack = true
+                }
             }
             await qwen.unload()
             if !meetingActive {
@@ -1317,7 +1383,7 @@ final class AppModel {
             }
             try Task.checkCancellation()
             guard epoch == dictationEpoch else { throw CancellationError() }
-            await deliver(raw: raw, finished: finished, fellBack: fellBack)
+            await deliver(raw: raw, finished: finished, fellBack: fellBack, fallbackHint: post.fallbackHint)
         } catch is CancellationError {
             await deliverCancelledDictation()
         } catch {
@@ -1327,7 +1393,7 @@ final class AppModel {
         }
     }
 
-    private func deliver(raw: String, finished: String, fellBack: Bool) async {
+    private func deliver(raw: String, finished: String, fellBack: Bool, fallbackHint: String) async {
         let text = finished.trimmingCharacters(in: .whitespacesAndNewlines)
         let didInsert: Bool
         if text.isEmpty {
@@ -1354,13 +1420,7 @@ final class AppModel {
             return
         }
         if fellBack, didInsert {
-            showOverlayHint(
-                t(
-                    "Polishing was not possible. The original text was inserted.",
-                    "Glätten nicht möglich, Rohtext eingefügt."
-                ),
-                milliseconds: 3200
-            )
+            showOverlayHint(fallbackHint, milliseconds: 3200)
             return
         }
         switch DictationDelivery.decide(text: text, inserted: didInsert) {
@@ -1524,8 +1584,8 @@ final class AppModel {
         livePreview = written ? "" : text
     }
 
-    /// Long dictations go through in pieces so none is cut off. A piece that fails keeps its unpolished text.
-    private func polishDictation(_ text: String) async throws -> PolishFallback.Step {
+    /// Long text goes through in pieces so none is cut off. A piece that fails keeps its original text.
+    private func refineWithModel(_ text: String, kind: PolishKind) async throws -> PolishFallback.Step {
         var result = ""
         var fellBack = false
         let polisher = qwen
@@ -1534,7 +1594,7 @@ final class AppModel {
             let outcome: Result<String, Error>
             do {
                 let polished = try await AsyncDeadline.value(ModelDeadline.polish) {
-                    try await polisher.polish(raw: piece, kind: .dictation)
+                    try await polisher.polish(raw: piece, kind: kind)
                 }
                 outcome = .success(polished)
             } catch is CancellationError {
@@ -1789,8 +1849,9 @@ final class AppModel {
             )
             if settings.polishEnabled, downloads.isUsable(.qwen), !transcript.isEmpty {
                 let polisher = qwen
+                let summaryLanguage = settings.translateTarget?.promptName
                 let reply = try await AsyncDeadline.value(ModelDeadline.polish) {
-                    try await polisher.polish(raw: transcript, kind: .meeting)
+                    try await polisher.polish(raw: transcript, kind: .meeting(summaryLanguage))
                 }
                 await qwen.unload()
                 meetingNotes = Self.parseNotes(reply)

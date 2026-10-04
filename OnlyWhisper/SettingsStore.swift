@@ -117,6 +117,15 @@ enum SpeechChoice: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var title: String { t(spec.english, spec.german) }
 
+    /// English name for model prompts. Stays English when the app language is German.
+    var promptName: String { spec.english }
+
+    func matches(_ needle: String) -> Bool {
+        spec.english.localizedStandardContains(needle)
+            || spec.german.localizedStandardContains(needle)
+            || code?.caseInsensitiveCompare(needle) == .orderedSame
+    }
+
     private var spec: (code: String?, english: String, german: String, parakeet: Bool) {
         switch self {
         case .automatic: (nil, "Automatic", "Automatisch", false)
@@ -266,7 +275,7 @@ enum RewriteAction: String, CaseIterable, Identifiable, Sendable {
         case .tasks:
             "Turn the text into a to-do list. Keep the language."
         case .translate:
-            "Translate the text into \(target.title). Return only the translation."
+            "Translate the text into \(target.promptName). Write only in \(target.promptName). Return only the translation."
         }
     }
 }

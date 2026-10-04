@@ -129,6 +129,50 @@ final class FileTranscriptionQueueTests: XCTestCase {
         XCTAssertFalse(queue.hasFinishedJobs)
     }
 
+    func testRefineReplacesTheTranscript() async throws {
+        let folder = makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let wav = try writeTone(named: "voice.wav", in: folder)
+        let queue = FileTranscriptionQueue()
+        let gate = RefineGate()
+        var recorded: [String] = []
+        queue.record = { _, text in
+            recorded.append(text)
+            return UUID()
+        }
+        queue.refine = { text in
+            await gate.entered()
+            return "DE: \(text)"
+        }
+        var drained = false
+        queue.onDrainFinished = { drained = true }
+
+        queue.enqueue([wav], speech: ScriptedTranscription(results: [.success("Hallo")]), language: .romanian)
+        await waitUntil { await gate.isWaiting() }
+        XCTAssertEqual(queue.jobs.first?.state, .translating)
+        await gate.release()
+        await waitUntilIdle(queue)
+
+        XCTAssertEqual(queue.jobs[0].state, .done)
+        XCTAssertEqual(queue.jobs[0].transcript, "DE: Hallo")
+        XCTAssertEqual(recorded, ["DE: Hallo"])
+        XCTAssertTrue(drained)
+    }
+
+    func testEmptyRefineKeepsTheTranscript() async throws {
+        let folder = makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let wav = try writeTone(named: "voice.wav", in: folder)
+        let queue = FileTranscriptionQueue()
+        queue.refine = { _ in "  " }
+
+        queue.enqueue([wav], speech: ScriptedTranscription(results: [.success("Hallo")]), language: .romanian)
+        await waitUntilIdle(queue)
+
+        XCTAssertEqual(queue.jobs[0].transcript, "Hallo")
+        XCTAssertEqual(queue.jobs[0].state, .done)
+    }
+
     func testGermanDownloadProducesATranscript() async throws {
         let source = URL(fileURLWithPath: NSHomeDirectory()).appending(path: "Downloads/Audio_test_german.ogg")
         try XCTSkipUnless(FileManager.default.fileExists(atPath: source.path), "Test audio is not in Downloads")
@@ -156,7 +200,7 @@ final class FileTranscriptionQueueTests: XCTestCase {
 
     private func waitUntilIdle(_ queue: FileTranscriptionQueue, timeout: Duration = .seconds(5)) async {
         await waitUntil(timeout: timeout) {
-            !queue.isDraining && !queue.jobs.contains { $0.state == .waiting || $0.state == .working }
+            !queue.isDraining && queue.jobs.allSatisfy(\.state.isFinished)
         }
     }
 
@@ -197,6 +241,27 @@ final class FileTranscriptionQueueTests: XCTestCase {
         let file = try AVAudioFile(forWriting: url, settings: format.settings)
         try file.write(from: buffer)
         return url
+    }
+}
+
+private actor RefineGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var waiting = false
+
+    func isWaiting() -> Bool { waiting }
+
+    func entered() async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            continuation = cont
+            waiting = true
+        }
+    }
+
+    func release() {
+        waiting = false
+        let continuation = continuation
+        self.continuation = nil
+        continuation?.resume()
     }
 }
 

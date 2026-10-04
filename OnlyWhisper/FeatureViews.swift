@@ -245,7 +245,7 @@ private struct FileJobRow: View {
         switch job.state {
         case .waiting:
             StatusBadge(title: job.state.title, tint: .secondary)
-        case .working:
+        case .working, .translating:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
                 Text(job.state.title)
