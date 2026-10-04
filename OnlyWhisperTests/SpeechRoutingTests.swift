@@ -88,18 +88,20 @@ final class SpeechRoutingTests: XCTestCase {
     }
 
     func testWhisperLanguages() {
-        let whisper: [SpeechChoice] = [
-            .irish, .japanese, .chinese, .korean, .arabic, .turkish, .indonesian, .vietnamese,
-            .hebrew, .hindi, .thai, .malay, .persian, .urdu, .bengali, .tamil, .cantonese,
-            .tagalog, .catalan, .norwegian, .afrikaans, .welsh, .basque, .icelandic, .serbian,
-            .macedonian, .albanian, .azerbaijani, .armenian, .georgian, .swahili, .galician,
-        ]
-        XCTAssertEqual(whisper.count, 32)
-        for choice in whisper {
-            XCTAssertTrue(choice.usesWhisper, choice.rawValue)
+        let languages = SpeechChoice.allCases.filter { $0 != .automatic }
+        XCTAssertEqual(languages.count, 100)
+        XCTAssertEqual(Set(languages.compactMap(\.code)).count, 100)
+        for choice in languages {
             XCTAssertNotNil(choice.code, choice.rawValue)
         }
-        XCTAssertEqual(SpeechChoice.allCases.count, 58)
+        let parakeet = Set(languages.filter(\.supportsParakeet).compactMap(\.code))
+        XCTAssertEqual(
+            parakeet,
+            [
+                "be", "bg", "bs", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu",
+                "it", "lt", "lv", "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sr", "sv", "uk",
+            ]
+        )
     }
 
     func testConfidentSilenceIsDropped() {

@@ -27,7 +27,6 @@ enum SpeechChoice: String, Codable, CaseIterable, Identifiable, Sendable {
     case maltese
     case russian
     case ukrainian
-    case irish
     case japanese
     case chinese
     case korean
@@ -59,6 +58,50 @@ enum SpeechChoice: String, Codable, CaseIterable, Identifiable, Sendable {
     case georgian
     case swahili
     case galician
+    case amharic
+    case assamese
+    case bashkir
+    case belarusian
+    case bosnian
+    case breton
+    case burmese
+    case faroese
+    case gujarati
+    case haitianCreole
+    case hausa
+    case hawaiian
+    case javanese
+    case kannada
+    case kazakh
+    case khmer
+    case lao
+    case latin
+    case lingala
+    case luxembourgish
+    case malagasy
+    case malayalam
+    case maori
+    case marathi
+    case mongolian
+    case nepali
+    case nynorsk
+    case occitan
+    case pashto
+    case punjabi
+    case sanskrit
+    case shona
+    case sindhi
+    case sinhala
+    case somali
+    case sundanese
+    case tajik
+    case tatar
+    case telugu
+    case tibetan
+    case turkmen
+    case uzbek
+    case yiddish
+    case yoruba
 
     var id: String { rawValue }
 
@@ -102,7 +145,6 @@ enum SpeechChoice: String, Codable, CaseIterable, Identifiable, Sendable {
         case .maltese: ("mt", "Maltese", "Maltesisch", true)
         case .russian: ("ru", "Russian", "Russisch", true)
         case .ukrainian: ("uk", "Ukrainian", "Ukrainisch", true)
-        case .irish: ("ga", "Irish", "Irisch", false)
         case .japanese: ("ja", "Japanese", "Japanisch", false)
         case .chinese: ("zh", "Chinese", "Chinesisch", false)
         case .korean: ("ko", "Korean", "Koreanisch", false)
@@ -126,7 +168,7 @@ enum SpeechChoice: String, Codable, CaseIterable, Identifiable, Sendable {
         case .welsh: ("cy", "Welsh", "Walisisch", false)
         case .basque: ("eu", "Basque", "Baskisch", false)
         case .icelandic: ("is", "Icelandic", "Isländisch", false)
-        case .serbian: ("sr", "Serbian", "Serbisch", false)
+        case .serbian: ("sr", "Serbian", "Serbisch", true)
         case .macedonian: ("mk", "Macedonian", "Mazedonisch", false)
         case .albanian: ("sq", "Albanian", "Albanisch", false)
         case .azerbaijani: ("az", "Azerbaijani", "Aserbaidschanisch", false)
@@ -134,6 +176,50 @@ enum SpeechChoice: String, Codable, CaseIterable, Identifiable, Sendable {
         case .georgian: ("ka", "Georgian", "Georgisch", false)
         case .swahili: ("sw", "Swahili", "Swahili", false)
         case .galician: ("gl", "Galician", "Galicisch", false)
+        case .amharic: ("am", "Amharic", "Amharisch", false)
+        case .assamese: ("as", "Assamese", "Assamesisch", false)
+        case .bashkir: ("ba", "Bashkir", "Baschkirisch", false)
+        case .belarusian: ("be", "Belarusian", "Belarussisch", true)
+        case .bosnian: ("bs", "Bosnian", "Bosnisch", true)
+        case .breton: ("br", "Breton", "Bretonisch", false)
+        case .burmese: ("my", "Burmese", "Birmanisch", false)
+        case .faroese: ("fo", "Faroese", "Färöisch", false)
+        case .gujarati: ("gu", "Gujarati", "Gujarati", false)
+        case .haitianCreole: ("ht", "Haitian Creole", "Haitianisch-Kreolisch", false)
+        case .hausa: ("ha", "Hausa", "Haussa", false)
+        case .hawaiian: ("haw", "Hawaiian", "Hawaiisch", false)
+        case .javanese: ("jw", "Javanese", "Javanisch", false)
+        case .kannada: ("kn", "Kannada", "Kannada", false)
+        case .kazakh: ("kk", "Kazakh", "Kasachisch", false)
+        case .khmer: ("km", "Khmer", "Khmer", false)
+        case .lao: ("lo", "Lao", "Laotisch", false)
+        case .latin: ("la", "Latin", "Latein", false)
+        case .lingala: ("ln", "Lingala", "Lingala", false)
+        case .luxembourgish: ("lb", "Luxembourgish", "Luxemburgisch", false)
+        case .malagasy: ("mg", "Malagasy", "Malagassi", false)
+        case .malayalam: ("ml", "Malayalam", "Malayalam", false)
+        case .maori: ("mi", "Maori", "Maori", false)
+        case .marathi: ("mr", "Marathi", "Marathi", false)
+        case .mongolian: ("mn", "Mongolian", "Mongolisch", false)
+        case .nepali: ("ne", "Nepali", "Nepalesisch", false)
+        case .nynorsk: ("nn", "Norwegian Nynorsk", "Norwegisch (Nynorsk)", false)
+        case .occitan: ("oc", "Occitan", "Okzitanisch", false)
+        case .pashto: ("ps", "Pashto", "Paschtu", false)
+        case .punjabi: ("pa", "Punjabi", "Panjabi", false)
+        case .sanskrit: ("sa", "Sanskrit", "Sanskrit", false)
+        case .shona: ("sn", "Shona", "Shona", false)
+        case .sindhi: ("sd", "Sindhi", "Sindhi", false)
+        case .sinhala: ("si", "Sinhala", "Singhalesisch", false)
+        case .somali: ("so", "Somali", "Somali", false)
+        case .sundanese: ("su", "Sundanese", "Sundanesisch", false)
+        case .tajik: ("tg", "Tajik", "Tadschikisch", false)
+        case .tatar: ("tt", "Tatar", "Tatarisch", false)
+        case .telugu: ("te", "Telugu", "Telugu", false)
+        case .tibetan: ("bo", "Tibetan", "Tibetisch", false)
+        case .turkmen: ("tk", "Turkmen", "Turkmenisch", false)
+        case .uzbek: ("uz", "Uzbek", "Usbekisch", false)
+        case .yiddish: ("yi", "Yiddish", "Jiddisch", false)
+        case .yoruba: ("yo", "Yoruba", "Yoruba", false)
         }
     }
 }
@@ -344,7 +430,7 @@ final class SettingsStore {
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            language = try container.decode(SpeechChoice.self, forKey: .language)
+            language = Self.speechChoice(from: container, forKey: .language) ?? .automatic
             speechModel = try container.decodeIfPresent(SpeechEngine.self, forKey: .speechModel)
             pendingSpeechModel = try container.decodeIfPresent(SpeechEngine.self, forKey: .pendingSpeechModel)
             removePendingPredecessor = try container.decodeIfPresent(Bool.self, forKey: .removePendingPredecessor)
@@ -353,11 +439,21 @@ final class SettingsStore {
             dictationKey = try container.decode(DictationKey.self, forKey: .dictationKey)
             systemAudioInMeetings = try container.decode(Bool.self, forKey: .systemAudioInMeetings)
             if container.contains(.translateTarget) {
-                translateTarget = try container.decodeIfPresent(SpeechChoice.self, forKey: .translateTarget)
+                translateTarget = Self.speechChoice(from: container, forKey: .translateTarget)
             } else {
                 translateTarget = .english
             }
             setupCompleted = try container.decodeIfPresent(Bool.self, forKey: .setupCompleted)
+        }
+
+        /// Unknown values, such as a language this build no longer offers, stay usable.
+        /// Speech falls back to automatic. A translation target falls back to off.
+        private static func speechChoice(
+            from container: KeyedDecodingContainer<CodingKeys>,
+            forKey key: CodingKeys
+        ) -> SpeechChoice? {
+            guard let raw = try? container.decode(String.self, forKey: key) else { return nil }
+            return SpeechChoice(rawValue: raw)
         }
 
         func encode(to encoder: Encoder) throws {
