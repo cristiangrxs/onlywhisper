@@ -277,4 +277,4 @@ gh release create "$TAG" "$DMG" \
 
 step "Done"
 echo "Released $APP_NAME $VERSION (build $BUILD)"
-echo "The website picks up the new release within about an hour."
+echo "The website picks up the new release immediately."
