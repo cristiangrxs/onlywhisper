@@ -1,7 +1,7 @@
 # OnlyWhisper
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/cristiangrxs/onlywhisper-landingpage/main/media/command-palette.png" alt="OnlyWhisper command palette">
+  <img src="https://github.com/user-attachments/assets/73853278-d9a3-4730-a0e6-382410b90c11" alt="OnlyWhisper command palette">
 </p>
 
 <p align="center">
@@ -17,7 +17,7 @@ Hold the right Option key, speak, and the text lands in the field you are using.
 
 https://github.com/user-attachments/assets/c6df423b-4328-41cf-9886-39abaa23691f
 
-![The sentence after it lands](https://raw.githubusercontent.com/cristiangrxs/onlywhisper-landingpage/main/media/inserted.png)
+![The sentence after it lands](https://github.com/user-attachments/assets/971f4226-6008-4af8-a59e-4ebca3afc729)
 
 ## What it does
 
