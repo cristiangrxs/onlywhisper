@@ -38,19 +38,24 @@ struct BrandIcon: View {
         RoundedRectangle(cornerRadius: size * 14 / 64, style: .continuous)
     }
 
+    private static let tile = Color(red: 13 / 255, green: 29 / 255, blue: 37 / 255)
+    private static let edge = Color(red: 16 / 255, green: 76 / 255, blue: 100 / 255)
+    private static let sand = Color(red: 213 / 255, green: 157 / 255, blue: 128 / 255)
+    private static let ember = Color(red: 182 / 255, green: 65 / 255, blue: 15 / 255)
+
     var body: some View {
         ZStack {
-            shape.fill(BrandPalette.ink)
+            shape.fill(Self.tile)
             BrandMark()
                 .stroke(
-                    BrandPalette.gradient,
+                    LinearGradient(colors: [Self.sand, Self.ember], startPoint: .topLeading, endPoint: .bottomTrailing),
                     style: StrokeStyle(lineWidth: size * 7 / 64, lineCap: .round, lineJoin: .round)
                 )
                 .padding(.horizontal, size * 10 / 64)
                 .padding(.vertical, size * 14 / 64)
         }
         .frame(width: size, height: size)
-        .overlay(shape.strokeBorder(.white.opacity(0.08), lineWidth: 0.5))
+        .overlay(shape.strokeBorder(Self.edge, lineWidth: max(0.5, size / 64)))
         .accessibilityHidden(true)
     }
 }
